@@ -1,0 +1,27 @@
+[Unit]
+Description=Evaluate Indicators of Vulnerability against this host
+# The daemon evaluates once on startup, so a boot is itself a re-evaluation.
+After=network-online.target wazuh-agent.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/wazuh-evaluate-iov-daemon
+EnvironmentFile=-/etc/wazuh-evaluate-iov/daemon.env
+Restart=on-failure
+RestartSec=60
+
+# An evaluation pass runs every cached IoV; give the in-flight one time to
+# finish after SIGTERM instead of having systemd kill it.
+TimeoutStopSec=120
+
+# Runs as root: it reads /proc and /boot/config-*, runs lsmod, dpkg-query and
+# rpm, and writes to the ossec queue socket. ProtectSystem=strict is
+# deliberately absent -- it would cut off /var/ossec.
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
+StateDirectory=wazuh-evaluate-iov
+
+[Install]
+WantedBy=multi-user.target

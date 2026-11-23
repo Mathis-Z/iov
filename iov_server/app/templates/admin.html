@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <title>IoV Server</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: monospace;
+      max-width: 860px;
+      margin: 2rem auto;
+      padding: 0 1.2rem;
+      color: #222;
+    }
+
+    h1 {
+      border-bottom: 2px solid #222;
+      padding-bottom: .4rem;
+      margin-bottom: 1.5rem;
+    }
+
+    h2 {
+      margin: 1.8rem 0 .6rem;
+      font-size: 1rem;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      color: #555;
+    }
+
+    input[type=text],
+    input[type=password] {
+      font-family: monospace;
+      padding: .35rem .6rem;
+      border: 1px solid #bbb;
+      width: 22rem;
+      font-size: .95rem;
+    }
+
+    button {
+      font-family: monospace;
+      padding: .35rem .9rem;
+      border: 1px solid #888;
+      background: #f0f0f0;
+      cursor: pointer;
+      font-size: .95rem;
+    }
+
+    button:hover {
+      background: #e0e0e0;
+    }
+
+    ul {
+      list-style: none;
+      padding: 0;
+      margin: .5rem 0;
+    }
+
+    li {
+      padding: .25rem 0;
+    }
+
+    a {
+      color: #0055cc;
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    pre {
+      background: #f6f6f6;
+      border: 1px solid #ddd;
+      padding: 1rem;
+      overflow: auto;
+      max-height: 70vh;
+      font-size: .85rem;
+    }
+
+    .msg {
+      margin: .4rem 0;
+      font-size: .9rem;
+    }
+
+    .ok {
+      color: #2a7a2a;
+    }
+
+    .err {
+      color: #aa0000;
+    }
+
+    .dim {
+      color: #888;
+    }
+
+  </style>
+</head>
+
+<body>
+  <h1>IoV Server</h1>
+
+  <section id="main">
+    <h2>Admin token</h2>
+    <input id="tok" type="password" placeholder="your-admin-token" autocomplete="off">
+    <button onclick="saveToken()">Save</button>
+    <span id="tok-msg" class="msg dim"></span>
+
+    <section id="queue-section">
+      <h2>Queue IoV generation</h2>
+      <input id="cve-in" type="text" placeholder="CVE-2024-12345">
+      <button onclick="queue()">Queue</button>
+      <div id="queue-msg" class="msg"></div>
+    </section>
+
+    <h2>Processed CVEs <button onclick="loadList()" style="font-size:.8rem">↻ refresh</button></h2>
+    <ul id="cve-list"></ul>
+  </section>
+
+  <section id="detail">
+    <button onclick="back()">← back</button>
+    <h2 id="detail-cve"></h2>
+    <pre id="detail-pre"></pre>
+  </section>
+
+  <script>
+    const tok = () => localStorage.getItem('iov_tok') || '';
+    const hdrs = () => tok() ? { Authorization: 'Bearer ' + tok() } : {};
+
+    function updateQueueVisibility() {
+      document.getElementById('queue-section').style.display = tok() ? '' : 'none';
+    }
+
+    function saveToken() {
+      const v = document.getElementById('tok').value.trim();
+      localStorage.setItem('iov_tok', v);
+      document.getElementById('tok-msg').textContent = v.length ? 'saved' : 'cleared';
+      updateQueueVisibility();
+      loadList();
+    }
+
+    function listMessage(text, cls) {
+      const ul = document.getElementById('cve-list');
+      ul.replaceChildren();
+      const li = document.createElement('li');
+      li.className = cls;
+      li.textContent = text;
+      ul.appendChild(li);
+    }
+
+    async function queue() {
+      const cve = document.getElementById('cve-in').value.trim().toUpperCase();
+      const msg = document.getElementById('queue-msg');
+      msg.className = 'msg';
+      msg.textContent = '';
+      if (!cve) { msg.textContent = 'Enter a CVE ID.'; return; }
+      msg.textContent = 'Queuing…';
+      try {
+        const r = await fetch('/api/' + encodeURIComponent(cve), { headers: hdrs() });
+        const d = await r.json();
+        if (r.ok) {
+          msg.className = 'msg ok';
+          msg.textContent = cve + ': ' + (d.status || 'ok');
+          if (d.status === 'queued') loadList();
+        } else {
+          msg.className = 'msg err';
+          msg.textContent = cve + ': ' + (d.detail || r.status);
+        }
+      } catch (e) {
+        msg.className = 'msg err';
+        msg.textContent = String(e);
+      }
+    }
+
+    async function loadList() {
+      listMessage('Loading…', 'dim');
+      try {
+        const r = await fetch('/api/cves?limit=1000', { headers: hdrs() });
+        if (r.status === 401) { listMessage('Enter admin token to see list.', 'dim'); return; }
+        if (!r.ok) { listMessage('Failed (' + r.status + ')', 'err'); return; }
+        const { cves } = await r.json();
+        const ul = document.getElementById('cve-list');
+        ul.replaceChildren();
+        if (!cves.length) {
+          listMessage('No processed CVEs yet.', 'dim');
+          return;
+        }
+        for (const c of cves) {
+          const a = document.createElement('a');
+          a.href = '#';
+          a.textContent = c;
+          a.addEventListener('click', e => { e.preventDefault(); showCve(c); });
+          const li = document.createElement('li');
+          li.appendChild(a);
+          ul.appendChild(li);
+        }
+      } catch (e) {
+        listMessage(String(e), 'err');
+      }
+    }
+
+    async function showCve(cve, pushHistory = true) {
+      document.getElementById('main').style.display = 'none';
+      document.getElementById('detail').style.display = 'block';
+      document.getElementById('detail-cve').textContent = cve;
+      const pre = document.getElementById('detail-pre');
+      pre.textContent = 'Loading…';
+      if (pushHistory) history.pushState({ cve }, '', '#' + encodeURIComponent(cve));
+      try {
+        const r = await fetch('/api/' + encodeURIComponent(cve));
+        const d = await r.json();
+        pre.textContent = JSON.stringify(d, null, 2);
+      } catch (e) {
+        pre.textContent = String(e);
+      }
+    }
+
+    function back() {
+      document.getElementById('detail').style.display = 'none';
+      document.getElementById('main').style.display = 'block';
+    }
+
+    window.addEventListener('popstate', e => {
+      if (e.state && e.state.cve) {
+        showCve(e.state.cve, false);
+      } else {
+        back();
+      }
+    });
+
+    // Initialise — restore detail view if page is loaded with a CVE hash
+    document.getElementById('detail').style.display = 'none';
+    document.getElementById('tok').value = tok();
+    updateQueueVisibility();
+    const _initialCve = decodeURIComponent(location.hash.slice(1));
+    if (_initialCve && /^CVE-\d{4}-\d{4,}$/.test(_initialCve)) {
+      showCve(_initialCve, false);
+    } else {
+      loadList();
+    }
+  </script>
+</body>
+
+</html>

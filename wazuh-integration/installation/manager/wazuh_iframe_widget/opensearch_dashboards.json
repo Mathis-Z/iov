@@ -1,0 +1,10 @@
+{
+  "id": "wazuhIframeWidget",
+  "version": "1.0.0",
+  "opensearchDashboardsVersion": "2.10.0",
+  "server": true,
+  "ui": true,
+  "configPath": ["wazuhIframeWidget"],
+  "requiredPlugins": ["navigation"],
+  "optionalPlugins": []
+}

@@ -1,0 +1,84 @@
+\begin{table*}[t]
+\centering
+\caption{All 66 CVEs of the evaluation (RQ2). S: CVE set (\cref{sec:eval-selection}). Vuln.: reference assessment. Wazuh: $\bullet$~reported, --~not reported. \iov{}: level reported by the \iov{}. \ok{}~correct, \bad{}~incorrect, \unk{}~no statement.}
+\label{tab:rq2}
+\scriptsize
+\begin{tabular}[t]{@{}l l c c l l@{}}
+\toprule
+CVE & Component & S & Vuln. & Wazuh & \iov{} \\
+\midrule
+CVE-2026-90698 & memcached & 1 & yes & $\bullet$ \ok & \lvl{low} \ok \\
+CVE-2026-78123 & strongSwan & 1 & yes & $\bullet$ \ok & \lvl{high} \ok \\
+CVE-2026-78124 & strongSwan & 1 & yes & $\bullet$ \ok & \lvl{med.} \ok \\
+CVE-2026-78126 & strongSwan & 1 & yes & $\bullet$ \ok & \lvl{high} \ok \\
+CVE-2026-78127 & strongSwan & 1 & yes & $\bullet$ \ok & \lvl{high} \ok \\
+CVE-2026-78129 & strongSwan & 1 & yes & $\bullet$ \ok & \lvl{med.} \ok \\
+CVE-2026-78130 & strongSwan & 1 & yes & $\bullet$ \ok & \lvl{high} \ok \\
+CVE-2026-78131 & strongSwan & 1 & yes & $\bullet$ \ok & \lvl{high} \ok \\
+CVE-2026-78132 & strongSwan & 1 & yes & $\bullet$ \ok & \lvl{med.} \ok \\
+CVE-2026-78133 & strongSwan & 1 & no & -- \ok & \lvl{abs.} \ok \\
+CVE-2026-78134 & strongSwan & 1 & yes & $\bullet$ \ok & \lvl{low} \ok \\
+CVE-2026-78135 & strongSwan & 1 & yes & $\bullet$ \ok & \lvl{low} \ok \\
+CVE-2026-20337 & ClamAV & 1 & yes & $\bullet$ \ok & \lvl{med.} \ok \\
+CVE-2026-20338 & ClamAV & 1 & yes & $\bullet$ \ok & \lvl{low} \ok \\
+CVE-2026-20339 & ClamAV & 1 & yes & $\bullet$ \ok & \lvl{med.} \ok \\
+CVE-2026-20345 & ClamAV & 1 & yes & $\bullet$ \ok & \lvl{low} \ok \\
+CVE-2026-20346 & ClamAV & 1 & yes & $\bullet$ \ok & \lvl{low} \ok \\
+CVE-2026-20347 & ClamAV & 1 & yes & $\bullet$ \ok & \lvl{med.} \ok \\
+CVE-2026-20348 & ClamAV & 1 & yes & $\bullet$ \ok & \lvl{low} \ok \\
+CVE-2026-33535 & ImageMagick & 1 & yes & -- \bad & \lvl{low} \ok \\
+CVE-2026-33536 & ImageMagick & 1 & yes & -- \bad & \lvl{low} \ok \\
+CVE-2026-34238 & ImageMagick & 1 & yes & -- \bad & \lvl{med.} \ok \\
+CVE-2026-40310 & ImageMagick & 1 & yes & -- \bad & \lvl{inc.} \unk \\
+CVE-2026-40311 & ImageMagick & 1 & yes & -- \bad & \lvl{low} \ok \\
+CVE-2026-40312 & ImageMagick & 1 & yes & -- \bad & \lvl{med.} \ok \\
+CVE-2026-56361 & ImageMagick & 1 & yes & -- \bad & \lvl{inc.} \unk \\
+CVE-2026-18798 & OpenSSL (QUIC) & 2 & no & -- \ok & \lvl{abs.} \ok \\
+CVE-2026-21444 & libtpms & 2 & no & -- \ok & \lvl{abs.} \ok \\
+CVE-2026-40542 & Apache HttpClient & 2 & no & -- \ok & \lvl{abs.} \ok \\
+CVE-2026-43055 & SCSI target & 2 & no & -- \ok & \lvl{abs.} \ok \\
+CVE-2026-56312 & Capgo & 2 & no & -- \ok & \lvl{abs.} \ok \\
+CVE-2026-74650 & rtl8723bs & 2 & yes & $\bullet$ \ok & \lvl{low} \ok \\
+CVE-2026-7900 & Chrome (ANGLE) & 2 & no & -- \ok & \lvl{abs.} \ok \\
+\bottomrule
+\end{tabular}\hspace{1.5em}%
+\begin{tabular}[t]{@{}l l c c l l@{}}
+\toprule
+CVE & Component & S & Vuln. & Wazuh & \iov{} \\
+\midrule
+CVE-2026-89561 & IPv6 RPL & 2 & yes & $\bullet$ \ok & \lvl{high} \ok \\
+CVE-2026-91746 & Chrome & 2 & no & -- \ok & \lvl{abs.} \ok \\
+CVE-2026-93687 & braces (npm) & 2 & no & -- \ok & \lvl{inc.} \unk \\
+CVE-2025-68767 & hfsplus & 3 & yes & $\bullet$ \ok & \lvl{med.} \ok \\
+CVE-2025-71083 & drm/ttm & 3 & yes & $\bullet$ \ok & \lvl{low} \ok \\
+CVE-2026-23370 & dell-wmi-sysman & 3 & yes & $\bullet$ \ok & \lvl{low} \ok \\
+CVE-2026-31428 & nfnetlink\_log & 3 & yes & $\bullet$ \ok & \lvl{low} \ok \\
+CVE-2026-31532 & CAN raw & 3 & yes & $\bullet$ \ok & \lvl{low} \ok \\
+CVE-2026-53088 & bcmgenet & 3 & yes & $\bullet$ \ok & \lvl{low} \ok \\
+CVE-2026-68299 & vmxnet3 & 3 & yes & $\bullet$ \ok & \lvl{inc.} \unk \\
+CVE-2026-80690 & UFS core & 3 & no & -- \ok & \lvl{inc.} \unk \\
+CVE-2026-93798 & btrfs & 3 & yes & -- \bad & \lvl{inc.} \unk \\
+CVE-2026-93814 & SPI core & 3 & yes & -- \bad & \lvl{low} \ok \\
+CVE-2026-43033 & authencesn & 4 & yes & $\bullet$ \ok & \lvl{med.} \ok \\
+CVE-2026-45920 & ext4 & 4 & yes & $\bullet$ \ok & \lvl{high} \ok \\
+CVE-2026-53147 & Thunderbolt & 4 & yes & $\bullet$ \ok & \lvl{low} \ok \\
+CVE-2026-63879 & amdgpu & 4 & yes & $\bullet$ \ok & \lvl{low} \ok \\
+CVE-2026-63971 & SCTP & 4 & yes & $\bullet$ \ok & \lvl{med.} \ok \\
+CVE-2026-64178 & Bluetooth BNEP & 4 & yes & $\bullet$ \ok & \lvl{med.} \ok \\
+CVE-2026-64390 & ksmbd & 4 & yes & $\bullet$ \ok & \lvl{low} \ok \\
+CVE-2026-72340 & Microchip VCAP & 4 & no & $\bullet$ \bad & \lvl{abs.} \ok \\
+CVE-2026-90341 & coreboot & 4 & no & $\bullet$ \bad & \lvl{abs.} \ok \\
+CVE-2026-92485 & BPF trampoline & 4 & yes & $\bullet$ \ok & \lvl{abs.} \bad \\
+CVE-2024-56326 & Jinja2 & 5 & no & $\bullet$ \bad & \lvl{abs.} \ok \\
+CVE-2024-6345 & setuptools & 5 & no & $\bullet$ \bad & \lvl{abs.} \ok \\
+CVE-2026-30922 & pyasn1 & 5 & yes & $\bullet$ \ok & \lvl{med.} \ok \\
+CVE-2026-4224 & Python (Expat) & 5 & yes & $\bullet$ \ok & \lvl{med.} \ok \\
+CVE-2026-58013 & GLib & 5 & yes & $\bullet$ \ok & \lvl{med.} \ok \\
+CVE-2026-59884 & pyasn1 & 5 & yes & $\bullet$ \ok & \lvl{med.} \ok \\
+CVE-2026-59886 & pyasn1 & 5 & yes & $\bullet$ \ok & \lvl{med.} \ok \\
+CVE-2026-59939 & httplib2 & 5 & yes & $\bullet$ \ok & \lvl{low} \ok \\
+CVE-2026-6100 & Python (lzma) & 5 & yes & $\bullet$ \ok & \lvl{low} \ok \\
+CVE-2026-78002 & rsyslog & 5 & yes & $\bullet$ \ok & \lvl{low} \ok \\
+\bottomrule
+\end{tabular}
+\end{table*}

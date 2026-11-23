@@ -1,0 +1,883 @@
+# Indicator of Vulnerability (IoV), format version 2
+
+An IoV describes how a host agent (e.g. a Wazuh agent) determines how likely it is that a specific CVE applies to a Linux host. It consists of two optional parts, at least one of which must be present:
+
+- `packages`: installed-package version matching. Entries are keyed by binary package name. Their affected and unaffected version ranges apply only to explicitly listed distribution releases, optionally restricted to certain package architectures and to builds of the distribution itself.
+- `script`: a small, sandboxed, side-effect-free script written in an extended dialect of Google's Common Expression Language (CEL). It inspects the host's configuration and runtime state through typed, read-only built-ins (kernel features and modules, kernel build configuration, processes, listening sockets, systemd units, sysctls, files, directories, structured configuration files, packages, security modules, accounts, …) and returns a confidence score.
+
+In addition, an IoV carries metadata: the format version, optional `references` to the advisories it is based on, and optional `created`/`updated` timestamps.
+
+The result of evaluating an IoV is a **confidence score** that the CVE applies to the host, together with a human-readable **reason** (see "Evaluation results"):
+
+| Value | Constant(s)          | Meaning                                                                                                   |
+|-------|----------------------|-----------------------------------------------------------------------------------------------------------|
+| 0     | `ABSENT`             | The host is not affected: the package is patched or not installed, or the vulnerable code is definitely not present/reachable. |
+| 1     | `LOW`                | An affected version is present, but preconditions for exploitation are largely absent or mitigated.      |
+| 2     | `MEDIUM`, `DEFAULT`  | An affected version is present and there is no evidence either way about the preconditions.             |
+| 3     | `HIGH`               | An affected version is present and the preconditions for exploitation are affirmatively present.         |
+| —     | (none)               | **INCONCLUSIVE**: the IoV makes no statement about the host. This is not evidence of safety.              |
+
+An IoV follows exactly the following JSON schema:
+
+<<< START OF IOV SCHEMA >>>
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://example.org/schemas/iov-2.schema.json",
+    "title": "Indicator of Vulnerability (IoV), format version 2",
+    "description": "An Indicator of Vulnerability (IoV, format version 2) expresses how likely it is that a specific CVE applies to a Linux host. An agent (e.g. a Wazuh agent) evaluates the optional 'packages' object and the optional 'script' and produces a confidence score from 0 to 3 (ABSENT, LOW, MEDIUM = DEFAULT, HIGH) or no score (INCONCLUSIVE), together with a human-readable reason. At least one of 'packages' and 'script' must be present. Evaluation: (1) If 'packages' is present, the host's release (ID and VERSION_ID from /etc/os-release) must match at least one release of some range set in the IoV; otherwise the result is INCONCLUSIVE. Every relevant installed package whose name equals a key (or, if no key equals its name, matches a regex key) is then classified under that key; installed kernel image packages other than the one of the running kernel are not relevant. Classification: among the key's range sets whose 'arches' is absent or contains the package's architecture, the one owning the most specific release that matches the host is chosen (on equal specificity, a range set with 'arches' wins over one without); if there is none, the package is UNKNOWN; if the chosen range set has \"origin\": \"distribution\" and the package is not verifiably a build of the host's distribution, it is UNKNOWN; otherwise its version is compared with the chosen range set and is AFFECTED (it matches 'affected'), UNAFFECTED (it matches 'unaffected' and not 'affected') or UNKNOWN (it matches neither). If any package is AFFECTED, the result is the script's result (DEFAULT if there is no script, or if the script returns null or fails). Otherwise, if any package is UNKNOWN, the result is INCONCLUSIVE. Otherwise (every relevant package UNAFFECTED, or no relevant package installed) the result is ABSENT. (2) If only 'script' is present, the result is the script's result; null, a missing return, or a runtime error map to INCONCLUSIVE.",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+        "schema_version",
+        "uuid",
+        "cve",
+        "description"
+    ],
+    "anyOf": [
+        {
+            "required": [
+                "packages"
+            ]
+        },
+        {
+            "required": [
+                "script"
+            ]
+        }
+    ],
+    "properties": {
+        "schema_version": {
+            "const": 2,
+            "description": "The IoV format version. Always 2 for this format. A document without 'schema_version' is format version 1. An agent that does not support the version does not evaluate the IoV (INCONCLUSIVE)."
+        },
+        "uuid": {
+            "type": "string",
+            "format": "uuid",
+            "description": "A unique identifier for this IoV (RFC 4122 UUID).",
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        },
+        "cve": {
+            "type": "string",
+            "description": "The CVE identifier this IoV applies to, in the form CVE-YYYY-NNNN (the numeric sequence is at least 4 digits and may be longer).",
+            "pattern": "^CVE-[0-9]{4}-[0-9]{4,}$"
+        },
+        "created": {
+            "$ref": "#/$defs/timestamp",
+            "description": "When this IoV was first published. Set by the publishing system, not by the generator."
+        },
+        "updated": {
+            "$ref": "#/$defs/timestamp",
+            "description": "When the content of this IoV last changed. Set by the publishing system, not by the generator. CONSTRAINT (not enforceable by JSON Schema): must not be earlier than 'created'."
+        },
+        "description": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Human-readable explanation of what this IoV represents: the vulnerability, the packages, releases and fixed versions (with their advisories), notable releases left uncovered, the preconditions the script checks, and why each resulting confidence level was chosen."
+        },
+        "references": {
+            "type": "array",
+            "minItems": 1,
+            "description": "Sources this IoV is based on: the CVE record, upstream advisories or fix commits, and the distribution advisories from which the fixed versions were taken. Advisories that document fixed versions list the releases they apply to, so that every range set can be traced back to a source. CONSTRAINT (not enforceable by JSON Schema): every release of every range set should be listed by at least one reference; validators may warn otherwise.",
+            "items": {
+                "$ref": "#/$defs/reference"
+            }
+        },
+        "packages": {
+            "type": "object",
+            "minProperties": 1,
+            "description": "Package version matching, keyed by binary package name. Each key is either the exact name of an installed binary package or, for package families whose names embed a version or ABI number, an RE2 regex anchored with ^ and $. Each value states, per distribution release (and optionally per architecture), which versions of the package are affected or unaffected. See the top-level description for how entries are evaluated and combined.",
+            "propertyNames": {
+                "$ref": "#/$defs/packageKey"
+            },
+            "additionalProperties": {
+                "$ref": "#/$defs/package"
+            }
+        },
+        "script": {
+            "type": "string",
+            "minLength": 1,
+            "description": "A sandboxed, side-effect-free script in extended CEL, stored as a single string with newline-separated lines. Statements (one per line): 'let <name> := <CEL>' (define or redefine a global variable), 'return <CEL>' (end the script; the value must be an int 0..3, one of the constants ABSENT/LOW/MEDIUM/DEFAULT/HIGH, or null), and 'if <CEL>' ... ['elif <CEL>' ...] ['else' ...] 'end' blocks, which may be nested. Lines whose first non-whitespace characters are '//' are comments. There are no loops and no user-defined functions. Reaching the end of the script is equivalent to 'return null'. Every runtime error (CEL evaluation error, undefined variable, non-boolean condition, invalid return value, sandbox limit) makes the script produce no output, which is treated like null. The CEL environment provides the constants ABSENT, LOW, MEDIUM, DEFAULT, HIGH and the read-only built-ins os_release, uname, kernel_cmdline (constants); get_processes, process_environ, listening_sockets, service_exposed, interfaces, routes, kernel_config, kernel_modules, kernel_feature, sysctl, userns_unprivileged_allowed, cpu, pci_devices, mounts, systemd_unit, systemd_units, systemd_unit_property, selinux, apparmor, file_info, list_dir, find_files, glob, file_hash, read_file, file_matches, find_all, directive_values, ini_values, xml_query, json_query, yaml_query, installed_packages, package_owner, package_verify, version_compare, users, groups, shadow. CONSTRAINT (not enforceable by JSON Schema): the script must parse, and every execution path must end in an explicit 'return'. Validate at ingestion time."
+        }
+    },
+    "$defs": {
+        "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$",
+            "description": "An RFC 3339 timestamp in UTC, e.g. '2026-09-25T10:00:00Z'."
+        },
+        "reference": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "source"
+            ],
+            "anyOf": [
+                {
+                    "required": [
+                        "id"
+                    ]
+                },
+                {
+                    "required": [
+                        "url"
+                    ]
+                }
+            ],
+            "description": "One source. At least one of 'id' and 'url' must be present.",
+            "properties": {
+                "source": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Who published the reference, e.g. 'NVD', 'upstream', 'fix commit', 'Debian DSA', 'Debian tracker', 'Ubuntu USN', 'Red Hat RHSA', 'SUSE', 'Alpine secdb', 'Arch ASA'."
+                },
+                "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The identifier assigned by the source, e.g. 'CVE-2024-6387', 'DSA-5724-1', 'USN-6859-1', 'RHSA-2024:4312', or a commit hash."
+                },
+                "url": {
+                    "type": "string",
+                    "format": "uri",
+                    "pattern": "^https?://",
+                    "description": "Where the reference can be read."
+                },
+                "releases": {
+                    "type": "array",
+                    "minItems": 1,
+                    "uniqueItems": true,
+                    "description": "The releases whose fixed versions this reference documents, in the same notation as range sets. Omit for references that are not release-specific, such as the CVE record or the upstream fix.",
+                    "items": {
+                        "$ref": "#/$defs/release"
+                    }
+                }
+            }
+        },
+        "regex": {
+            "type": "string",
+            "minLength": 1,
+            "description": "An RE2 regular expression. It is searched (unanchored) in the target value; use ^ and $ to anchor."
+        },
+        "release": {
+            "type": "string",
+            "pattern": "^[a-z0-9._-]+(:([a-z0-9._-]+(,[a-z0-9._-]+)*)?)?$",
+            "description": "Releases of one distribution, matched against the unquoted ID and VERSION_ID fields of /etc/os-release (ID_LIKE is not considered). Three forms: 'ID' (e.g. 'arch') matches every release of the distribution, with or without VERSION_ID (specificity 0). 'ID:' (e.g. 'debian:') matches only hosts of that distribution without VERSION_ID or with an empty one, such as Debian testing and unstable (specificity 1). 'ID:VERSIONS' lists comma-separated versions, e.g. 'ubuntu:22.04,22.10' or 'rhel:8.7,8.8,8.9,8.10'; a token 'A-B' whose sides consist of digits and dots is a numeric range that expands to every version between them: both sides must have the same number of dot-separated parts and differ only in the last part, so 'fedora:37-45' means 37, 38, ..., 45 and 'rhel:8.7-8.10' means 8.7, 8.8, 8.9, 8.10. Each version V matches hosts whose VERSION_ID equals V or starts with V followed by '.', so 'rhel:9' matches 9, 9.0 and 9.4, 'rhel:9.1' does not match 9.10, 'alpine:3.20' matches 3.20.3, and 'amzn:2' does not match 2023 (specificity 1 plus the number of dots in V). No other wildcards or regexes. When several releases of the same package entry match a host, the most specific one is used. CONSTRAINT (not enforceable by JSON Schema): numeric ranges must satisfy the rules above, and after expansion each (ID, version) appears at most once across the range sets without 'arches' of the same package entry, and at most once per architecture across its range sets with 'arches'."
+        },
+        "packageKey": {
+            "type": "string",
+            "minLength": 1,
+            "anyOf": [
+                {
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]*$"
+                },
+                {
+                    "pattern": "^\\^.*\\$$"
+                }
+            ],
+            "description": "Either the exact name of an installed (binary) package, as shown by `dpkg-query -W -f '${Package}'`, `rpm -q --qf '%{NAME}'`, `apk info` or `pacman -Qq` (e.g. 'libssl3', 'openssl-libs', 'kernel-core', 'openssh'), or an RE2 regex starting with '^' and ending with '$' for package families whose names embed a version or ABI number (e.g. '^linux-image-6\\.1\\.0-[0-9]+-(amd64|cloud-amd64|rt-amd64)$'). An installed package is evaluated under the key equal to its name; if no key equals its name, it is evaluated under every regex key it matches. The ranges of a regex key must be valid for every package the regex can match."
+        },
+        "package": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "ranges"
+            ],
+            "description": "Version information for one package, or one package family, across distribution releases. An installed package on a release (and architecture) that no range set of this entry matches is UNKNOWN. To state that every version of the package is unaffected on some releases, use a range set for them with \"unaffected\": \"*\".",
+            "properties": {
+                "ranges": {
+                    "type": "array",
+                    "minItems": 1,
+                    "description": "Range sets, each valid for the releases (and architectures) listed in it.",
+                    "items": {
+                        "$ref": "#/$defs/rangeSet"
+                    }
+                }
+            }
+        },
+        "rangeSet": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "releases"
+            ],
+            "anyOf": [
+                {
+                    "required": [
+                        "affected"
+                    ]
+                },
+                {
+                    "required": [
+                        "unaffected"
+                    ]
+                }
+            ],
+            "description": "Version ranges valid for every listed release. Typically \"affected\": \"< FIX\" and \"unaffected\": \">= FIX\", so that no version on these releases is UNKNOWN. At least one of 'affected' and 'unaffected' must be present.",
+            "properties": {
+                "releases": {
+                    "type": "array",
+                    "minItems": 1,
+                    "uniqueItems": true,
+                    "description": "The releases this range set applies to, one string per distribution ID, e.g. [\"rhel:8.7-8.10\", \"almalinux:8.7-8.10\"]. The no-VERSION_ID form 'ID:' may be listed in addition to an 'ID:VERSIONS' string of the same distribution. Listing a release here also makes it covered.",
+                    "items": {
+                        "$ref": "#/$defs/release"
+                    }
+                },
+                "arches": {
+                    "type": "array",
+                    "minItems": 1,
+                    "uniqueItems": true,
+                    "items": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9_]+$"
+                    },
+                    "description": "Optional. Restricts the range set to installed packages of these architectures, named as the package manager reports the package's architecture: RPM '%{ARCH}' (x86_64, aarch64, i686, noarch, ...), dpkg '${Architecture}' (amd64, arm64, i386, all, ...), apk (x86_64, aarch64, x86, armv7, noarch, ...), pacman (x86_64, aarch64, any, ...). This is the package's architecture, not the machine's: a 32-bit library on a 64-bit multilib host has the 32-bit architecture. Without 'arches' the range set applies to every architecture. When a package's release matches range sets with and without 'arches' at the same specificity, the one with 'arches' is used."
+                },
+                "origin": {
+                    "enum": [
+                        "distribution"
+                    ],
+                    "description": "Optional. \"distribution\": the range set applies only to packages built by the host's distribution. The agent checks this against its own trust list for the distribution: on RPM hosts the key that signed the installed package; on dpkg, apk and pacman hosts, whether the distribution's own sources offer the installed version, or offer the package in a newer version while no other source offers the installed one. A package whose origin is different or cannot be determined is UNKNOWN on these releases instead of being compared, so third-party builds of the same name (vendor repositories, PPAs, self-built packages) are never classified with the distribution's version numbers."
+                },
+                "affected": {
+                    "$ref": "#/$defs/affectedRange",
+                    "description": "The affected version range. An installed version matching it makes the package AFFECTED, even if it also matches 'unaffected'."
+                },
+                "unaffected": {
+                    "anyOf": [
+                        {
+                            "$ref": "#/$defs/range"
+                        },
+                        {
+                            "const": "*"
+                        }
+                    ],
+                    "description": "The unaffected version range, or \"*\" for every version. An installed version matching it and not 'affected' makes the package UNAFFECTED. Because 'affected' takes precedence, \"unaffected\": \"*\" means 'every version that is not affected'; use it when the unaffected versions are not one contiguous range (e.g. \"affected\": \">= INTRO, < FIX\") or when every version is unaffected."
+                }
+            }
+        },
+        "range": {
+            "type": "string",
+            "pattern": "^\\s*(<=|>=|<|>)\\s*[A-Za-z0-9._+~:^_-]+(\\s*,\\s*(<=|>=|<|>)\\s*[A-Za-z0-9._+~:^_-]+)?\\s*$",
+            "description": "A version range as a string of one or two comma-separated conditions, all of which must match. A condition is an operator (<, <=, >, >=), optional whitespace and a full package version, e.g. '< 1.0.1f-1ubuntu2.27+esm6', '>= 1:3.0.1-47.el9_1', '< 3.3.2-r0' or '>= 2.0-1, < 2.0-5'. Versions are compared with the ordering of the release's package manager (see 'version'). CONSTRAINT (not enforceable by JSON Schema): a range contains at most one lower bound (> or >=) and at most one upper bound (< or <=), and the lower bound must not be greater than the upper bound. Each version must be a valid 'version' (no spaces or commas)."
+        },
+        "affectedRange": {
+            "anyOf": [
+                {
+                    "$ref": "#/$defs/range"
+                },
+                {
+                    "const": "*"
+                }
+            ],
+            "description": "An affected version range, or \"*\" for every version. Its upper bound ('<' or '<=') is the fixed version, e.g. '< 1.1.1n-0+deb11u4' or '>= 2.4.0-1, < 2.4.7-3'. A release without a fix has no upper bound: '>= INTRO' if the vulnerable code was introduced in a known version, otherwise \"*\"."
+        },
+        "version": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._+~:^_-]+$",
+            "description": "A full package version string exactly as the package manager reports it for the installed package, including the epoch if the package has one. dpkg: '[epoch:]upstream_version[-debian_revision]', e.g. '1:9.2p1-2+deb12u3'. RPM: '[epoch:]version-release' without architecture, e.g. '8.7p1-38.el9_4.1'. apk: 'version-rN', e.g. '3.3.2-r0' or '9.7_p1-r4'. pacman: '[epoch:]pkgver-pkgrel', e.g. '9.8p1-1'. Versions are compared with the algorithm of the package manager that the release's distribution ID is bound to (dpkg --compare-versions; rpmvercmp/EVR comparison with a missing epoch as 0; apk version comparison; pacman vercmp)."
+        }
+    },
+    "examples": [
+        {
+            "schema_version": 2,
+            "uuid": "6f1c2b9e-8d4a-4c3e-9b7f-2a5d8e1f0c47",
+            "cve": "CVE-2024-6387",
+            "description": "regreSSHion: a signal handler race condition in OpenSSH's sshd allows unauthenticated remote code execution as root on glibc-based Linux systems. Distribution-specific fixed versions of openssh-server are listed for Debian 12 (DSA-5724-1), Ubuntu 22.04 (USN-6859-1) and all RHEL 9 minor releases (RHSA-2024:4312); other releases are INCONCLUSIVE. On affected hosts, the script checks whether sshd is exposed (service_exposed covers listening processes and systemd socket activation), whether the mitigation 'LoginGraceTime 0' is configured, and whether the host is 32-bit, where exploitation has been publicly demonstrated. Not running, mitigated or only listening on loopback => LOW; 32-bit => HIGH; otherwise MEDIUM.",
+            "references": [
+                {
+                    "source": "NVD",
+                    "id": "CVE-2024-6387",
+                    "url": "https://nvd.nist.gov/vuln/detail/CVE-2024-6387"
+                },
+                {
+                    "source": "Debian DSA",
+                    "id": "DSA-5724-1",
+                    "url": "https://www.debian.org/security/2024/dsa-5724",
+                    "releases": [
+                        "debian:12"
+                    ]
+                },
+                {
+                    "source": "Ubuntu USN",
+                    "id": "USN-6859-1",
+                    "url": "https://ubuntu.com/security/notices/USN-6859-1",
+                    "releases": [
+                        "ubuntu:22.04"
+                    ]
+                },
+                {
+                    "source": "Red Hat RHSA",
+                    "id": "RHSA-2024:4312",
+                    "url": "https://access.redhat.com/errata/RHSA-2024:4312",
+                    "releases": [
+                        "rhel:9"
+                    ]
+                }
+            ],
+            "packages": {
+                "openssh-server": {
+                    "ranges": [
+                        {
+                            "releases": [
+                                "debian:12"
+                            ],
+                            "affected": "< 1:9.2p1-2+deb12u3",
+                            "unaffected": ">= 1:9.2p1-2+deb12u3"
+                        },
+                        {
+                            "releases": [
+                                "ubuntu:22.04"
+                            ],
+                            "affected": "< 1:8.9p1-3ubuntu0.10",
+                            "unaffected": ">= 1:8.9p1-3ubuntu0.10"
+                        },
+                        {
+                            "releases": [
+                                "rhel:9"
+                            ],
+                            "affected": "< 8.7p1-38.el9_4.1",
+                            "unaffected": ">= 8.7p1-38.el9_4.1"
+                        }
+                    ]
+                }
+            },
+            "script": "// The vulnerable code is the SIGALRM handler of sshd's pre-authentication listener.\nlet exposure := service_exposed([\"sshd\", \"ssh\"])\nif exposure == \"installed\" || exposure == \"absent\"\n  // sshd is installed but neither running nor socket-activated.\n  return LOW\nend\n// 'LoginGraceTime 0' removes the vulnerable timeout code path; sshd uses the first value it reads.\nlet grace := directive_values([\"/etc/ssh/sshd_config\"], \"LoginGraceTime\", \"first\")\nif grace != null && size(grace) == 1 && grace[0].matches(r\"^0+[sSmMhHdDwW]?$\")\n  return LOW\nelif exposure == \"loopback\"\n  // Only reachable from the host itself.\n  return LOW\nelif uname != null && uname.machine.matches(r\"^(i[3-6]86|armv[5-7]l?)$\")\n  // Exploitation has been publicly demonstrated against 32-bit glibc systems.\n  return HIGH\nelse\n  return MEDIUM\nend"
+        },
+        {
+            "schema_version": 2,
+            "uuid": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+            "cve": "CVE-2024-26581",
+            "description": "Script-only IoV. The vulnerability is in nf_tables (nft_set_rbtree). If the kernel is built without nf_tables, the vulnerable code is not present (ABSENT). If a modprobe override prevents the module from being loaded, it is not reachable unless loaded by root (LOW). If unprivileged user namespaces are disabled, the usual route for unprivileged users to reach nf_tables is closed (LOW). If nf_tables is loaded or built in and unprivileged user namespaces are available, the host is likely exposed (HIGH). If nf_tables is only available as a module that is not loaded, or the user namespace state is unknown, MEDIUM. If neither the module list nor the kernel configuration is available, the IoV is inconclusive.",
+            "references": [
+                {
+                    "source": "NVD",
+                    "id": "CVE-2024-26581",
+                    "url": "https://nvd.nist.gov/vuln/detail/CVE-2024-26581"
+                }
+            ],
+            "script": "// nf_tables can be loaded, built in, or available as an autoloadable module.\nlet nft := kernel_feature(\"CONFIG_NF_TABLES\", \"nf_tables\")\nif nft == \"absent\"\n  // Kernel built without nf_tables: the vulnerable code is not present.\n  return ABSENT\nelif nft == null\n  // Neither the module list nor the kernel configuration is available.\n  return null\nelif nft == \"disabled\" || nft == \"blacklisted\"\n  // A modprobe override prevents the module from being (auto)loaded.\n  return LOW\nend\n// Unprivileged user namespaces are the usual route for unprivileged users to reach nf_tables.\nlet userns := userns_unprivileged_allowed()\nif userns == false\n  return LOW\nelif userns == true && (nft == \"loaded\" || nft == \"builtin\")\n  return HIGH\nelse\n  // Only available as a module that is not loaded, or user namespace state unknown.\n  return MEDIUM\nend"
+        },
+        {
+            "schema_version": 2,
+            "uuid": "0b8e7c52-9a31-4f0e-8d6c-5e2f1a7b9c33",
+            "cve": "CVE-2099-12345",
+            "created": "2026-09-25T10:00:00Z",
+            "updated": "2026-09-25T10:00:00Z",
+            "description": "FICTITIOUS example that only illustrates 'origin', 'arches' and 'created'/'updated'; the CVE, package and versions are invented. A heap overflow in the TLS session ticket parser of the libfoo library. Debian 12 fixed it in libfoo1 1.4.2-1+deb12u1 (DSA-9999-1); builds from the upstream vendor's repository use a different version scheme, so the range set is restricted to Debian's own builds (origin) and vendor builds are INCONCLUSIVE. On RHEL 9 only the 32-bit i686 build is affected (the overflow is in 32-bit-only code), fixed in 1.4.2-3.el9_4 (RHSA-2099:0001); every other architecture is unaffected. On affected hosts, the script checks the daemon configuration: session tickets explicitly off => LOW; explicitly configured on => HIGH; unreadable or not configured => MEDIUM.",
+            "references": [
+                {
+                    "source": "Debian DSA",
+                    "id": "DSA-9999-1",
+                    "url": "https://www.debian.org/security/2099/dsa-9999",
+                    "releases": [
+                        "debian:12"
+                    ]
+                },
+                {
+                    "source": "Red Hat RHSA",
+                    "id": "RHSA-2099:0001",
+                    "url": "https://access.redhat.com/errata/RHSA-2099:0001",
+                    "releases": [
+                        "rhel:9"
+                    ]
+                }
+            ],
+            "packages": {
+                "libfoo1": {
+                    "ranges": [
+                        {
+                            "releases": [
+                                "debian:12"
+                            ],
+                            "origin": "distribution",
+                            "affected": "< 1.4.2-1+deb12u1",
+                            "unaffected": ">= 1.4.2-1+deb12u1"
+                        }
+                    ]
+                },
+                "libfoo": {
+                    "ranges": [
+                        {
+                            "releases": [
+                                "rhel:9"
+                            ],
+                            "arches": [
+                                "i686"
+                            ],
+                            "affected": "< 1.4.2-3.el9_4",
+                            "unaffected": ">= 1.4.2-3.el9_4"
+                        },
+                        {
+                            "releases": [
+                                "rhel:9"
+                            ],
+                            "unaffected": "*"
+                        }
+                    ]
+                }
+            },
+            "script": "// The vulnerable parser is only reached when the TLS ticket feature is enabled in the daemon's configuration.\nlet tickets := ini_values(\"/etc/foo/foo.conf\", \"tls\", \"session_tickets\")\nif tickets == null || size(tickets) == 0\n  // Configuration unreadable or option not set: the default is on, but the daemon may use another file.\n  return MEDIUM\nelif tickets[size(tickets) - 1] == \"off\"\n  // The last assignment wins.\n  return LOW\nelse\n  return HIGH\nend"
+        }
+    ]
+}
+<<< END OF IOV SCHEMA >>>
+
+The version numbers in the schema examples illustrate the format only, and the third example is entirely fictitious. Always research the actual versions and advisories for the CVE you are working on.
+
+# Evaluation semantics
+
+## Format version
+
+`schema_version` is `2` for this format. A document without `schema_version` is format version 1 (no `arches`, `origin`, `references`, timestamps, and the older text-based script built-ins). An agent does not evaluate a document whose format version it does not support; the result is INCONCLUSIVE.
+
+## Metadata
+
+- `references` lists the sources the IoV is based on. Each entry has a `source` and at least one of `id` and `url`. Advisories that document fixed versions list the `releases` they apply to, in the same notation as range sets. This makes every range set traceable: at ingestion time, a validator can check that every release listed in a range set is also listed by at least one reference, and flag range sets without a source.
+- `created` and `updated` are RFC 3339 UTC timestamps (`2026-09-25T10:00:00Z`) of the first publication and the last content change. They are set by the publishing system. `updated` is never earlier than `created`.
+- References and timestamps do not influence the score.
+
+## Releases
+
+The host's release is identified by the unquoted `ID` and `VERSION_ID` values from `/etc/os-release`. `ID_LIKE` is not considered: a `rhel` entry does not match Rocky Linux or AlmaLinux.
+
+Each range set has a `releases` list with **one string per distribution ID**. A string has one of three forms:
+
+| Form | Example | Matches |
+|------|---------|---------|
+| `ID` | `arch` | every release of the distribution, with or without `VERSION_ID` |
+| `ID:` | `debian:` | only hosts of the distribution without `VERSION_ID` (or with an empty one), e.g. Debian testing and unstable |
+| `ID:VERSIONS` | `ubuntu:22.04,22.10`, `rhel:8.7-8.10`, `fedora:37-45`, `rhel:9`, `alpine:3.20` | the listed versions |
+
+`VERSIONS` is a comma-separated list. A token `A-B` whose sides consist of digits and dots is a **numeric range**: both sides must have the same number of dot-separated parts and may differ only in the last part, and the token expands to every version in between. `fedora:37-45` means 37, 38, …, 45, and `rhel:8.7-8.10` means 8.7, 8.8, 8.9 and 8.10. Non-consecutive versions, such as Ubuntu's, are listed individually (`ubuntu:23.04,23.10`). There are no other wildcards or regexes.
+
+Each version `V` matches hosts whose `VERSION_ID` equals `V` or starts with `V` followed by `.`, so version matching respects dot boundaries: `rhel:9` matches `9`, `9.0` and `9.4`; `rhel:9.1` matches `9.1` but not `9.10`; `alpine:3.20` matches `3.20.3`; `amzn:2` matches `2` but not `2023`.
+
+The no-`VERSION_ID` form `ID:` may be listed in addition to an `ID:VERSIONS` string of the same distribution, e.g. `["debian:12,13", "debian:"]`.
+
+After expansion, each release has a **specificity**: 0 for `ID`, 1 for `ID:`, and 1 plus the number of dots in the version for `ID:V` (`rhel:9` is 1, `rhel:9.0` is 2). When several releases of the same package entry match the host, the **most specific** one is used. A package can therefore use `rhel:9` for all RHEL 9 minor releases and override it with `rhel:9.0` for RHEL 9.0. After expansion, a release must not appear more than once across the range sets without `arches` of the same package entry, and not more than once per architecture across its range sets with `arches`, so ties cannot occur.
+
+## Package managers
+
+Each distribution ID is bound to the package manager whose version strings and comparison algorithm its range sets use:
+
+| Package manager | Distribution IDs | Version as installed | Comparison |
+|---|---|---|---|
+| dpkg | `debian`, `ubuntu`, `linuxmint`, `pop`, `kali`, `raspbian`, `devuan` | `${Version}`, e.g. `1:9.2p1-2+deb12u3` | `dpkg --compare-versions` |
+| rpm | `rhel`, `centos`, `fedora`, `rocky`, `almalinux`, `ol`, `amzn`, `sles`, `sled`, `sles_sap`, `opensuse-leap`, `opensuse-tumbleweed`, `azurelinux`, `mariner`, `photon` | `[%{EPOCH}:]%{VERSION}-%{RELEASE}`, e.g. `1:3.0.7-27.el9` | rpmvercmp / EVR comparison, missing epoch = 0 |
+| apk | `alpine`, `wolfi`, `postmarketos` | `version-rN`, e.g. `3.3.2-r0`, `9.7_p1-r4` | apk version comparison |
+| pacman | `arch`, `archarm`, `manjaro`, `endeavouros` | `[epoch:]pkgver-pkgrel`, e.g. `9.8p1-1` | `vercmp` |
+
+For a distribution ID not in this table, the agent uses the host's native package manager.
+
+## Version ranges
+
+`affected` and `unaffected` are strings. A range is one or two comma-separated **conditions**, all of which must match. A condition is an operator (`<`, `<=`, `>`, `>=`), optional whitespace, and a full package version:
+
+- `< 1.0.1f-1ubuntu2.27+esm6`: every version below the fix.
+- `>= 1.0.1f-1ubuntu2.27+esm6`: the fix and every later version.
+- `>= 2.4.0-1, < 2.4.7-3`: versions from 2.4.0-1 (inclusive) up to 2.4.7-3 (exclusive).
+
+A range contains at most one lower bound (`>` or `>=`) and at most one upper bound (`<` or `<=`). In `affected`, the upper bound is the fixed version. A release that has no fix yet has no upper bound: its `affected` range is `>= INTRO` if the vulnerable code was introduced in a known version, otherwise `"*"`.
+
+`affected` and `unaffected` may also be the wildcard `"*"`, which matches every version. Because `affected` takes precedence, `"unaffected": "*"` next to an `affected` range means "every version that is not affected". Use it where the unaffected versions do not form a single range, e.g. `"affected": ">= INTRO, < FIX"` with `"unaffected": "*"` covers both the versions before `INTRO` and those from `FIX` on. `"affected": "*"` means that every version is affected, which is the case on a release that has no fix yet.
+
+Versions are compared against the installed package's version using the algorithm of the package manager bound to the release (see "Package managers").
+
+## Architectures (`arches`)
+
+A range set may carry an `arches` list. It then applies only to installed packages whose **package** architecture is listed, named as the package manager reports it (RPM `x86_64`, `aarch64`, `i686`, `noarch`; dpkg `amd64`, `arm64`, `i386`, `all`; apk `x86_64`, `aarch64`, `x86`; pacman `x86_64`, `any`). This is the architecture of the package, not of the machine: on a 64-bit multilib host, `glibc.i686` has architecture `i686`. A range set without `arches` applies to every architecture.
+
+`arches` is needed when version matching differs by architecture:
+
+- The vulnerable code exists only in some architectures' builds (architecture-specific assembly, 32-bit-only code paths, drivers or firmware for one platform). The other architectures are then stated as unaffected with a second range set without `arches` and `"unaffected": "*"`. A script cannot express this correctly, because it only sees the machine's architecture, not the architecture of each installed package.
+- A distribution shipped the fix for different architectures in different builds.
+
+When a package's release matches range sets with and without `arches` at the same specificity, the range set with `arches` is used. Release specificity is compared first: a more specific release without `arches` still wins over a less specific one with `arches`.
+
+## Origin (`origin`)
+
+A range set with `"origin": "distribution"` applies only to packages built by the host's distribution. The agent verifies this against its own trust list for the distribution:
+
+- RPM: the key that signed the installed package header is one of the distribution's signing keys.
+- dpkg, apk and pacman record no signature for an installed package, so the agent compares the installed version with what the configured sources offer (APT sources whose Release file names one of the distribution's origins; the distribution's apk repositories; the distribution's pacman sync databases). The package is a distribution build if a distribution source offers exactly the installed version, or if no other configured source offers it and it sorts at or below the newest version the distribution offers. The second case covers hosts that lag behind their updates, whose builds the distribution archive no longer lists.
+
+A package that fails this check, or whose origin cannot be determined, is **UNKNOWN** on those releases instead of being compared. This matters because version numbers are only meaningful within one build line: a same-named package from a vendor repository, a PPA or a local build can carry a version that sorts above the distribution's fix (e.g. `nginx` `1.26.1-1~jammy` from nginx.org against Ubuntu's `1.18.0-6ubuntu14.4`) while still containing the vulnerable code, or the reverse. Without `origin`, such builds are compared with the distribution's version numbers like any other package. `origin` also narrows `"unaffected": "*"`, which otherwise covers every same-named build.
+
+## Package evaluation
+
+`packages` is an object. Its keys are binary package names exactly as installed, as shown by `dpkg-query -W -f '${Package}'`, `rpm -q --qf '%{NAME}'`, `apk info` or `pacman -Qq`. For package families whose names embed a version or ABI number (e.g. Debian and Ubuntu kernel images), a key can instead be an RE2 regex that starts with `^` and ends with `$`. Each value contains `ranges`: a list of **range sets**. Each range set lists the `releases` it applies to, optionally `arches` and `origin`, and an `affected` and/or `unaffected` version range.
+
+**Coverage.** A host is **covered** if its release matches at least one release of any range set anywhere in the IoV (regardless of `arches`). If the host is not covered, the IoV is INCONCLUSIVE: nobody researched this release, so the absence of the listed packages is no evidence.
+
+**Relevant packages.** An installed package is relevant if its name equals a key, or, if no key equals its name, matches a regex key. A package that matches several regex keys is evaluated under each of them. Every installed instance counts, including every installed architecture of a multilib package, with one exception:
+
+**Kernel images.** A package that ships a kernel image (it owns `/boot/vmlinuz-*` or files below `/lib/modules/*/`) is relevant only if it belongs to the running kernel, i.e. it owns `/boot/vmlinuz-R` or files below `/lib/modules/R/`, where `R` is `uname.release`. Other installed kernels are not running and cannot be exploited until the host boots them. If kernel image packages are installed under a key but none of them belongs to the running kernel (e.g. a self-built kernel), that key yields one UNKNOWN.
+
+**Classification.** For each relevant package and each key it is evaluated under:
+
+- The candidate range sets are those of the key whose `arches` is absent or contains the package's architecture. Among them, the agent chooses the range set owning the most specific release that matches the host; on equal specificity, a range set with `arches` wins.
+- **UNKNOWN** if there is no such range set. This happens when a package is installed on a release or architecture for which the IoV has no information about it, e.g. a library left over from a previous release after a distribution upgrade.
+- **UNKNOWN** if the chosen range set has `"origin": "distribution"` and the package is not verifiably a build of the distribution.
+- Otherwise the package's version is compared with the chosen range set:
+  - **AFFECTED** if it matches `affected`. This holds even if it also matches `unaffected`.
+  - **UNAFFECTED** if it does not match `affected` and matches `unaffected`.
+  - **UNKNOWN** if it matches neither.
+
+The overall result is computed as follows:
+
+```
+release = (ID, VERSION_ID or none) from /etc/os-release
+if "packages" in iov:
+    if no release of any range set in the IoV matches release:
+        return INCONCLUSIVE
+    states = []
+    for pkg in relevant installed packages:          # kernel images: only the running kernel's
+        if pkg.name in iov.packages:
+            keys = [pkg.name]
+        else:
+            keys = [k for k in regex keys if k matches pkg.name]
+        for k in keys:
+            states.append(classify(pkg, iov.packages[k]))
+    for k in keys with installed kernel image packages, none of them the running kernel's:
+        states.append(UNKNOWN)
+    if AFFECTED in states:
+        if "script" in iov:
+            result = run_script(iov.script)      # None on null, missing return, or runtime error
+            return DEFAULT if result is None else result
+        return DEFAULT
+    if UNKNOWN in states:
+        return INCONCLUSIVE
+    return ABSENT        # every relevant package is UNAFFECTED, or none is installed
+else:
+    result = run_script(iov.script)
+    return INCONCLUSIVE if result is None else result
+
+classify(pkg, entry):
+    candidates = [rs for rs in entry.ranges if "arches" not in rs or pkg.arch in rs.arches]
+    rs = candidate owning the most specific release matching release
+         (on equal specificity, prefer a range set with "arches")
+    if rs is None:
+        return UNKNOWN
+    if rs.origin == "distribution" and pkg is not verifiably a distribution build:
+        return UNKNOWN
+    if pkg.version matches rs.affected:
+        return AFFECTED
+    if pkg.version matches rs.unaffected:
+        return UNAFFECTED
+    return UNKNOWN
+```
+
+In short: an uncovered release is INCONCLUSIVE. On a covered release the precedence is **AFFECTED > UNKNOWN > UNAFFECTED**, and a covered release on which no relevant package is installed is ABSENT. When packages are present, the script only runs if an affected version is installed, and a script can then still return any level, including `ABSENT`.
+
+## Unaffected releases
+
+There is no separate field for "unaffected on this release". Both cases are expressed with a range set whose only range is `"unaffected": "*"`:
+
+- **A package is unaffected in every version on a release**, e.g. because the package name first appeared in the release after the fix (Debian's and Ubuntu's `libssl3t64`), or because the branch the release ships never contained the vulnerable code. Add a range set for the release with only `"unaffected": "*"`. Since no version is compared, the statement also applies to same-named builds from third-party repositories. If such builds are plausible and could be affected, add `"origin": "distribution"`, or use real version ranges instead.
+- **A researched release ships none of the keyed packages**, e.g. a CVE that only affects OpenSSL 3.x, on a release that only ships `libssl1.1`, which is not a key. Add a range set for the release with only `"unaffected": "*"` under one of the keys, preferably the package that would carry the vulnerable code there. The release is then covered: if no keyed package is installed, the result is ABSENT. The chosen key evaluates UNAFFECTED on that release even if installed from elsewhere (unless restricted with `origin`); every other key still evaluates UNKNOWN there.
+
+The same pattern with `arches` expresses "affected only on some architectures": one range set with `arches` and real ranges, and one without `arches` and only `"unaffected": "*"` for the same releases.
+
+## Script language
+
+The script is an extended dialect of Google's Common Expression Language (CEL). It is stored as a single JSON string, with lines separated by `\n`.
+
+```
+script     = { line }
+line       = blank | comment | statement
+comment    = "//" text                          (only as the first non-whitespace characters of a line)
+statement  = "let" IDENT ":=" CEL
+           | "return" CEL
+           | "if" CEL NEWLINE block { "elif" CEL NEWLINE block } [ "else" NEWLINE block ] "end"
+block      = { line }
+IDENT      = [A-Za-z_][A-Za-z0-9_]*
+```
+
+**Lines.** Each statement occupies exactly one line, and a CEL expression cannot span lines. The keywords `if`, `elif`, `else`, `end`, `let` and `return` must start their line. Leading whitespace is ignored: indentation is recommended for readability but has no meaning. `else` and `end` stand alone on their lines.
+
+**Comments.** A line whose first non-whitespace characters are `//` is a comment. There are no trailing comments, so `//` inside a statement, such as in a string literal, is part of the expression.
+
+**Blocks.** `if`/`elif`/`else` blocks can be nested, and each `if` chain is closed by exactly one `end`. Conditions are evaluated in order, and the first one that is `true` selects its block. There are no loops and no user-defined functions. To iterate over lists and maps, use CEL's macros: `exists`, `all`, `exists_one`, `filter`, `map`.
+
+**Conditions.** A condition must evaluate to a boolean. `null` or any other non-boolean value is a runtime error.
+
+**Variables.** `let name := <CEL>` evaluates the expression and binds the result to `name`. Later expressions can use it. All variables are global, and redefining a variable replaces its value. There is no plain assignment: to change a variable, for example inside a branch, write `let` again (`let fixed := true`); a line like `fixed := true` is a parse error. A variable name must not be a keyword, a CEL reserved word, or the name of a built-in function or constant. Referring to a variable whose `let` was never executed, for example because it sits in a branch that was not taken, is a runtime error.
+
+**Return.** `return <CEL>` ends the script. The value must be an integer from 0 to 3 (the constants below are integers) or `null`. Any other value is a runtime error. `return null`, like reaching the end of the script, means "no output".
+
+**Statelessness.** A script has no side effects. All built-ins are read-only queries of the host's current state; none of them changes the host, writes files, starts processes, loads modules or communicates over the network. Evaluating the same IoV twice on an unchanged host gives the same result. An agent may cache built-in results within one evaluation.
+
+**Runtime errors.** A runtime error means the script produces no output, exactly like `null`. This happens on a parse error, a CEL evaluation error (e.g. calling `.matches()` on `null`, applying `!` to `null`, accessing a field of `null`, or indexing a map with a missing key), an undefined variable, a non-boolean condition, an invalid return value, or exceeding the agent's sandbox limits (see below). As a result:
+- If an affected package matched, the IoV's result is `DEFAULT`.
+- If there is no `packages` item, the result is INCONCLUSIVE.
+
+The reason reported with the result names the error (see "Evaluation results"), so errors are visible to operators even though they do not change the score semantics.
+
+**Sandbox limits.** The agent enforces a wall-clock limit on the whole script (at least 10 seconds), returns at most 10,000 entries from any list-returning built-in, and reads at most 1 MB of any single file. Exceeding the entry limit or the time limit is a runtime error.
+
+**Regular expressions.** Regexes use RE2 syntax and are searched unanchored in the target text. Use `(?m)` so that `^`/`$` match at line boundaries, and `(?i)` for case-insensitive matching. Prefer CEL raw strings (`r"..."`) for regexes to avoid double escaping inside CEL. Inside the JSON string, `"` must still be written as `\"`, `\` as `\\`, and line breaks as `\n`.
+
+**CEL notes.** Standard CEL is available: `size`, `in`, `has`, `matches`, `contains`, `startsWith`, `endsWith`, `int`, `string`, `double`, the conditional operator `c ? a : b`, and the macros above. Accessing a missing map key with `m["k"]` or `m.k` is a runtime error; test with `"k" in m` first. CEL's `&&` and `||` absorb errors when the other side decides the result (`false && error` is `false`), so `m != null && "k" in m && m["k"] == "v"` is safe.
+
+## Built-in environment
+
+All built-ins are read-only. Any constant or function whose underlying data source is unavailable (command not installed, file unreadable, insufficient privileges, no systemd in a container, …) yields `null`, including those whose normal type is `bool`, `list` or `map`. Functions that return a list return `[]` when the source is available but nothing matches, and `null` only when the source is unavailable, so `[]` is evidence of absence and `null` is not.
+
+Paths are absolute. Fields of a returned map that could not be determined individually are `""` for strings, `-1` for integers, and `null` for lists and maps, unless stated otherwise.
+
+### Constants
+
+| Name | Type | Description |
+|------|------|-------------|
+| `ABSENT`, `LOW`, `MEDIUM`, `DEFAULT`, `HIGH` | int | Confidence levels 0, 1, 2, 2, 3. |
+| `uname` | map | The running kernel's `uname(2)` data: `sysname` (`Linux`), `nodename` (host name), `release` (as `uname -r`, e.g. `6.1.0-18-amd64`), `version` (as `uname -v`, e.g. `#1 SMP PREEMPT_DYNAMIC Debian 6.1.76-1 (2024-02-01)`), `machine` (as `uname -m`, e.g. `x86_64`, `aarch64`, `armv7l`). |
+| `os_release` | map(string, string) | The fields of `/etc/os-release` (falling back to `/usr/lib/os-release`) with unquoted values, e.g. `os_release["ID"]`, `os_release["VERSION_ID"]`. Absent fields are absent keys. |
+| `kernel_cmdline` | map(string, string) | The parameters of `/proc/cmdline` (split on whitespace, honouring double quotes). `key=value` becomes `key: "value"`, a bare flag becomes `flag: ""`; for repeated keys the last occurrence wins. E.g. `"mitigations" in kernel_cmdline && kernel_cmdline["mitigations"] == "off"`. |
+
+### Kernel
+
+| Function | Returns | Description |
+|---|---|---|
+| `kernel_config(name)` | string \| null | Value of the build option `name` (full name, e.g. `CONFIG_NF_TABLES`) in the running kernel's build configuration (`/boot/config-R`, otherwise `/proc/config.gz`): `"y"`, `"m"`, the option's value for string/int options (unquoted), or `"n"` if the option is `# ... is not set` or does not appear at all. `null` if no configuration is available. |
+| `kernel_modules()` | list(map) | Currently loaded modules from `/proc/modules`: `name`, `size` (int), `refcount` (int), `used_by` (list(string)), `state` (`Live`, `Loading`, `Unloading`). Does **not** include code built into the kernel. |
+| `kernel_feature(config_opt, module)` | string \| null | Standard-library helper that combines configuration, loaded modules and modprobe policy correctly. `module` may be `null` if the feature cannot be a module. Decision order, first match wins: (1) `"loaded"` if `module` is in `/proc/modules` (`-` and `_` are equivalent); (2) `"builtin"` if `kernel_config(config_opt) == "y"` or `module` is listed in `/lib/modules/R/modules.builtin`; (3) if `kernel_config(config_opt) == "m"` or a module file for `module` exists below `/lib/modules/R/`: `"disabled"` if module loading is disabled (`kernel.modules_disabled = 1`) or modprobe configuration (`/etc/modprobe.d`, `/run/modprobe.d`, `/usr/lib/modprobe.d`, `/lib/modprobe.d`) contains `install <module>` pointing to `/bin/false`, `/bin/true`, `/usr/bin/false`, `/usr/bin/true` or `/dev/null`; else `"blacklisted"` if it contains `blacklist <module>` (blocks automatic loading via aliases, but not explicit `modprobe` by root); else `"module"`; (4) `"absent"` if `kernel_config(config_opt) == "n"` and no module file exists; (5) `null` otherwise. `R` is `uname.release`. |
+| `sysctl(name)` | string \| null | Current value of a kernel parameter, e.g. `sysctl("kernel.unprivileged_bpf_disabled")`, read from `/proc/sys` with runs of whitespace collapsed to one space. `null` if the parameter does not exist or is unreadable; use `file_info("/proc/sys/...")` to tell these apart. |
+| `userns_unprivileged_allowed()` | bool \| null | Standard-library helper: whether unprivileged users can create user namespaces with capabilities inside them. `false` if `kernel_config("CONFIG_USER_NS") == "n"`, `kernel.unprivileged_userns_clone` is `0` (Debian/Ubuntu kernels), `user.max_user_namespaces` is `0`, or `kernel.apparmor_restrict_unprivileged_userns` is `1` (Ubuntu 23.10+: unconfined processes get namespaces without capabilities). `true` if none of these applies and `user.max_user_namespaces` could be read. `null` otherwise. |
+
+### Hardware
+
+| Function | Returns | Description |
+|---|---|---|
+| `cpu()` | map | `vendor` (e.g. `GenuineIntel`, `AuthenticAMD`), `family`, `model`, `stepping` (int), `microcode` (string, e.g. `0xf4`), `flags` (list(string) from `/proc/cpuinfo`, of the first CPU), `vulnerabilities` (map(string, string): file name → contents of `/sys/devices/system/cpu/vulnerabilities/*`, e.g. `"spectre_v2": "Mitigation: Enhanced IBRS"`). |
+| `pci_devices()` | list(map) | PCI devices from `/sys/bus/pci/devices`: `slot` (e.g. `0000:00:1f.6`), `class` (hex, e.g. `0200`), `vendor_id`, `device_id`, `subsystem_vendor_id`, `subsystem_device_id` (hex strings without `0x`, lowercase), `vendor`, `device` (names from the PCI ID database, `""` if unknown), `driver` (bound driver, `""` if none), `modules` (list(string), modules that can drive the device). |
+| `mounts()` | list(map) | Mounted file systems from `/proc/self/mountinfo`: `device`, `mount_point`, `fs_type`, `options` (list(string), e.g. `["rw", "nosuid", "noexec"]`), `size_bytes`, `free_bytes` (int). |
+
+### Processes, services and network
+
+| Function | Returns | Description |
+|---|---|---|
+| `get_processes()` | list(map) | Currently running processes (see fields below). |
+| `process_environ(pid)` | map(string, string) \| null | Environment variables of the process from `/proc/{pid}/environ`. `null` if unreadable (usually insufficient privileges) or the process does not exist. |
+| `listening_sockets()` | list(map) | TCP sockets in LISTEN state and bound, unconnected UDP sockets, from `/proc/net/{tcp,tcp6,udp,udp6}` cross-referenced with process file descriptors: `protocol` (`tcp` or `udp`), `family` (`ipv4` or `ipv6`), `local_address` (e.g. `0.0.0.0`, `::`, `127.0.0.1`, `192.0.2.10`), `local_port` (int), `wildcard` (bool, bound to `0.0.0.0` or `::`; an IPv6 wildcard socket also accepts IPv4 unless `net.ipv6.bindv6only` is set), `loopback` (bool, bound to `127.0.0.0/8` or `::1`), `pid` (int, `-1` if the owner is unknown), `program` (process name, `""` if unknown), `exe` (`""` if unknown), `uid` (int, socket owner). Sockets held by systemd for socket activation appear with `program` `systemd`. |
+| `service_exposed(names)` | string \| null | Standard-library helper: how exposed a service is. `names` is a list of names that identify the service, e.g. `["sshd", "ssh"]`. A process belongs to the service if its `name` or the base name of its `exe` is in `names`, or it runs in the cgroup of a systemd unit `<name>.service`; a socket belongs to the service if a process of the service holds it or it is listed by an active systemd unit `<name>.socket`. Returns, first match wins: `"network"` if any socket of the service is bound to a non-loopback address; `"loopback"` if it has sockets, all on loopback; `"running"` if a process of the service runs, or a unit `<name>.service` is active, without listening sockets; `"installed"` if a unit `<name>.service` or `<name>.socket` is loaded but inactive, or an executable named after one of `names` exists in `/usr/sbin`, `/usr/bin`, `/sbin` or `/bin`; `"absent"` otherwise. `null` if processes or sockets cannot be read. |
+| `interfaces()` | list(map) | Network interfaces: `name`, `mac` (`""` if none), `mtu` (int), `flags` (list(string), e.g. `["UP", "BROADCAST", "RUNNING", "MULTICAST"]`, `["LOOPBACK"]`, `["PROMISC"]`), `addresses` (list(string) in CIDR notation, e.g. `["192.0.2.10/24", "fe80::1/64"]`). |
+| `routes()` | list(map) | Routing table entries for IPv4 and IPv6: `family`, `destination` (CIDR, `0.0.0.0/0` for the default route), `gateway` (`""` if directly connected), `interface`, `metric` (int). |
+
+Each process map returned by `get_processes()` has these fields:
+
+- `pid`, `ppid` (int): process and parent process ID.
+- `name` (string): process name as reported by the kernel (from `/proc/{pid}/comm`, up to 15 characters).
+- `exe` (string): absolute path to the executable (from `/proc/{pid}/exe`). `""` if unreadable, e.g. for kernel threads.
+- `cmdline` (string): full command line with arguments joined by spaces (from `/proc/{pid}/cmdline`).
+- `cwd` (string): working directory (from `/proc/{pid}/cwd`).
+- `uid`, `euid`, `gid` (int): real and effective user ID, real group ID (from `/proc/{pid}/status`).
+- `loginuid`, `session_id` (int): audit login UID (`-1` if unset) and session ID.
+- `tty` (string): controlling terminal, e.g. `pts/0`, `""` if none.
+- `start_time` (int): start time in seconds since the Unix epoch.
+- `capabilities` (list(string)): effective capabilities, e.g. `["CAP_NET_BIND_SERVICE"]`; `null` if unreadable.
+- `selinux_context` (string): SELinux context, e.g. `system_u:system_r:sshd_t:s0-s0:c0.c1023`; `""` if none.
+- `has_listening_socket` (bool): true if the process holds at least one socket that appears in `listening_sockets()`.
+
+### systemd
+
+| Function | Returns | Description |
+|---|---|---|
+| `systemd_unit(name)` | map \| null | The unit with the full name `name` (e.g. `sshd.service`, `ssh.socket`): `name`, `load_state` (`loaded`, `not-found`, `masked`, …), `active_state` (`active`, `inactive`, `failed`, …), `sub_state` (`running`, `listening`, `dead`, …), `unit_file_state` (`enabled`, `disabled`, `static`, `masked`, `""`, …), `fragment_path`, `triggered_by`, `triggers`, `requires`, `wants` (list(string) of unit names), `listen` (list(string), the `Listen` entries of socket units, e.g. `["[::]:22 (Stream)"]`, `[]` for other units). A unit that does not exist is returned with `load_state` `not-found`. `null` if systemd is not running. |
+| `systemd_units(name_regex)` | list(map) | All loaded units and installed unit files whose name matches the regex, as `systemd_unit` maps. |
+| `systemd_unit_property(name, property)` | string \| null | Any property of a unit as shown by `systemctl show -p <property> --value <name>`, e.g. `systemd_unit_property("foo.service", "ExecStart")`. |
+
+### Security modules and accounts
+
+| Function | Returns | Description |
+|---|---|---|
+| `selinux()` | map | `mode` (`enforcing`, `permissive` or `disabled`), `policy` (e.g. `targeted`, `""` if disabled), `booleans` (map(string, bool) of the current SELinux boolean values). `mode` is `disabled` if SELinux is not enabled in the running kernel. |
+| `apparmor()` | map | `enabled` (bool), `profiles` (map(string, string): profile name → mode, `enforce`, `complain`, `kill`, `unconfined` or `prompt`). `profiles` is `null` if the profile list is unreadable. |
+| `users()` | list(map) | Local accounts from `/etc/passwd`: `name`, `uid`, `gid` (int), `gecos`, `home`, `shell`. |
+| `groups()` | list(map) | Local groups from `/etc/group`: `name`, `gid` (int), `members` (list(string)). |
+| `shadow()` | list(map) | Password state from `/etc/shadow` (requires privileges): `name`, `password_state` (`hashed`, `locked` for a `!`/`*` prefix or value, `empty` for an empty field, i.e. login without a password), `hash_algorithm` (`yescrypt`, `sha512`, `sha256`, `bcrypt`, `md5`, `des` or `""`), `last_change`, `min_days`, `max_days`, `warn_days`, `inactive_days`, `expire_date` (int, days; `-1` if empty). Password hashes are never exposed. |
+
+### Files and directories
+
+| Function | Returns | Description |
+|---|---|---|
+| `file_info(path)` | map \| null | Metadata of `path` without following a final symlink (`lstat`): `path`, `exists` (bool), `type` (`file`, `directory`, `symlink`, `char`, `block`, `fifo`, `socket`), `mode` (4-digit octal string including setuid/setgid/sticky, e.g. `"0644"`, `"4755"`), `permissions` (as `ls -l`, e.g. `"rwsr-xr-x"`), `uid`, `gid` (int), `user`, `group` (names, `""` if unknown), `size`, `mtime` (int, seconds since the epoch), `symlink_target` (`""` unless a symlink), `has_extended_acl` (bool), `selinux_context` (`""` if none). If the path does not exist, `{"path": path, "exists": false}` with all other fields `null`. `null` if it cannot be determined (e.g. permission denied on a parent directory). |
+| `list_dir(path)` | list(map) \| null | The entries of the directory `path` (without `.` and `..`), sorted by name, each a `file_info` map plus `name` (the entry's base name). Does not recurse. `null` if `path` is not a readable directory. |
+| `find_files(root, name_regex, max_depth)` | list(map) \| null | Recursive search below `root` for entries whose base name matches the regex, as `list_dir` maps, sorted by path. `max_depth` 1 means the direct children of `root` (at most 10). Symlinked directories are not followed, and `/proc`, `/sys` and `/dev` are never descended into. `null` if `root` is not a readable directory. |
+| `glob(pattern)` | list(string) | Paths matching a shell-style pattern (`*`, `?`, `[...]`; no `**`), sorted. `[]` if nothing matches. |
+| `file_hash(path, algorithm)` | string \| null | Lowercase hex digest of a regular file (following symlinks). `algorithm` is `md5`, `sha1`, `sha256` or `sha512`. |
+| `read_file(path)` | string \| null | Contents of the file (following symlinks, truncated to 1 MB), or `null` if unreadable. No wildcard expansion. Use the structured parsers below where they fit. |
+| `file_matches(paths, regex)` | list(map) \| null | Searches the regex in each file of `paths` (a list of paths and/or glob patterns; each file truncated to 1 MB). One map per match, in path order and then position: `path`, `line` (int, 1-based line of the match start), `match` (the matched text), `groups` (list(string), capture groups, `""` for groups that did not participate). `[]` if files were read but nothing matched; `null` if no file could be read. E.g. `size(file_matches(["/etc/foo.conf"], r"(?m)^\s*enable_x\s*=\s*1")) > 0`. |
+| `find_all(text, regex)` | list(map) \| null | All matches of the regex in `text`, as maps with `match` and `groups`. `null` if `text` is `null`. |
+
+### Structured configuration
+
+| Function | Returns | Description |
+|---|---|---|
+| `directive_values(paths, keyword, precedence)` | list(string) \| null | Parses keyword/value configuration files such as `sshd_config`, `ssh_config` and many daemon configurations. Each line is `Keyword value` or `Keyword=value`; `#` starts a comment; keywords are compared case-insensitively; values are trimmed, a trailing `;` is removed, and surrounding double quotes are stripped. `Include` and `IncludeOptional` lines are expanded in place (glob patterns in sorted order; relative paths are resolved against the including file's directory). Only global directives count: lines after a `Match` or `Host` line up to the end of that file, and lines inside `<Section>…</Section>` or `{ … }` blocks, are skipped. `paths` is a list of files and/or glob patterns processed in order. `precedence` is `"first"` (a list with the first value, as sshd uses), `"last"` (a list with the last value) or `"all"` (every value in order). `[]` if the keyword is not set; `null` if no file could be read. The daemon's built-in default applies when the result is `[]`. |
+| `ini_values(path, section, key)` | list(string) \| null | Values of `key` in `[section]` of an INI-style file, in file order (the last one usually wins). `key = value` and `key: value` are accepted; lines starting with `;` or `#` are comments; section and key are compared case-sensitively; section `""` means keys before the first section header. `[]` if not set; `null` if unreadable. |
+| `xml_query(path, xpath)` | list(string) \| null | Evaluates an XPath 1.0 expression on an XML file. Element results yield their text content, attribute and text results their value. External entities are never resolved. `null` if unreadable or not well-formed. |
+| `json_query(path, jsonpath)` | list \| null | Evaluates a JSONPath (RFC 9535) expression, e.g. `$.features.experimental`, on a JSON file. Results are converted to CEL values (objects to maps, arrays to lists, integral numbers to int). `null` if unreadable or invalid. |
+| `yaml_query(path, jsonpath)` | list \| null | Same as `json_query` for YAML files (safe loading only; YAML 1.1 scalar rules, so unquoted `yes`, `no`, `on` and `off` are booleans). For multi-document files, the expression is applied to every document and the results are concatenated. |
+
+### Packages
+
+| Function | Returns | Description |
+|---|---|---|
+| `installed_packages(name_regex)` | list(map) | Installed packages whose name matches the regex: `name`, `version` (in the same notation as range versions, including the epoch), `arch` (package architecture), `source` (source package name, `""` if unknown), `manager` (`dpkg`, `rpm`, `apk` or `pacman`). Use it for conditions that combine several packages, e.g. whether an optional plugin that reaches the vulnerable code is installed. |
+| `package_owner(path)` | list(string) \| null | Names of the installed packages that own `path`. `[]` if no package owns it. |
+| `package_verify(name)` | list(map) \| null | Files of an installed package that fail verification against the package database (`rpm -V`, `dpkg --verify`, `apk audit`, `pacman -Qkk`): `path`, `config` (bool, a configuration file), `missing`, `digest_changed`, `size_changed`, `mode_changed`, `owner_changed`, `mtime_changed` (bool; `null` for checks the package manager does not support). `[]` if every file verifies; `null` if the package is not installed or cannot be verified. |
+| `version_compare(a, b, scheme)` | int \| null | `-1`, `0` or `1` as `a` is lower than, equal to or greater than `b`. `scheme` is `dpkg`, `rpm`, `apk`, `pacman`, `semver` (SemVer 2.0.0, an optional leading `v` is ignored) or `generic` (split into numeric and alphabetic segments; numbers compare numerically, letters lexically, a missing segment sorts lower). `null` if an argument is `null` or not parseable under the scheme. An unknown scheme is a runtime error. |
+
+Example expressions:
+
+- `get_processes().exists(p, p.name == "sshd" && p.has_listening_socket)`
+- `listening_sockets().exists(s, s.protocol == "tcp" && s.local_port == 8080 && !s.loopback)`
+- `kernel_cmdline != null && "mitigations" in kernel_cmdline && kernel_cmdline["mitigations"] == "off"`
+- `sysctl("kernel.unprivileged_bpf_disabled") == "0"`
+- `list_dir("/etc/foo/plugins.d") != null && list_dir("/etc/foo/plugins.d").exists(e, e.type == "file" && e.name.endsWith(".so"))`
+- `installed_packages(r"^foo-plugin-xyz$") != null && size(installed_packages(r"^foo-plugin-xyz$")) > 0`
+- `systemd_unit("foo.socket") != null && systemd_unit("foo.socket").active_state == "active"`
+
+## Evaluation results
+
+This section defines what the agent reports. It is not part of the IoV document.
+
+For each evaluated IoV, the agent reports:
+
+```json
+{
+  "iov_uuid": "6f1c2b9e-8d4a-4c3e-9b7f-2a5d8e1f0c47",
+  "cve": "CVE-2024-6387",
+  "schema_version": 2,
+  "iov_updated": "2026-09-25T10:00:00Z",
+  "evaluated_at": "2026-09-26T08:15:02Z",
+  "agent_version": "2.0.0",
+  "host_release": "debian:12.5",
+  "packages": [
+    { "key": "openssh-server", "name": "openssh-server", "version": "1:9.2p1-2+deb12u2",
+      "arch": "amd64", "release": "debian:12", "state": "AFFECTED" }
+  ],
+  "script": { "ran": true, "returned": 1, "error": null },
+  "iov_score": 1,
+  "reason": "openssh-server 1:9.2p1-2+deb12u2 (amd64) is affected on debian:12 (affected: < 1:9.2p1-2+deb12u3); the script returned LOW."
+}
+```
+
+`iov_score` is `0`–`3`, or `-1` for INCONCLUSIVE. `packages` lists every relevant package with the key it was evaluated under, the chosen release (`null` if none matched) and its state. `script.returned` is the script's value (`null` for `null` or no output), and `script.error` is the runtime error message, if any.
+
+`reason` is a human-readable sentence that explains the result in terms of the concrete host, not a code. It names the deciding facts, as follows:
+
+| Situation | Score | The reason names |
+|---|---|---|
+| The document is not valid JSON or violates the schema. | INCONCLUSIVE | The validation error. |
+| The format version is unsupported, or the script uses a built-in the agent does not provide (checked before running). | INCONCLUSIVE | The version or the missing built-in. |
+| `packages` is present, but no range set lists the host's release. | INCONCLUSIVE | The host's release, e.g. "Release debian:13 is not covered by this IoV." |
+| No package is AFFECTED, and at least one is UNKNOWN because no release, architecture or range matched. | INCONCLUSIVE | Each UNKNOWN package with version, architecture and why (no range set for the release/architecture, or version outside every range). |
+| No package is AFFECTED, and at least one is UNKNOWN because its origin is not the distribution or could not be determined. | INCONCLUSIVE | The package, its version and its actual origin (signing key, repository) or that it could not be determined. |
+| Kernel image packages are installed under a key, but none belongs to the running kernel. | INCONCLUSIVE | The running kernel release and that no package owns it. |
+| Every relevant package is UNAFFECTED, or none is installed on a covered release. | ABSENT | The UNAFFECTED packages with versions and matched ranges, or that no keyed package is installed. |
+| A package is AFFECTED and there is no script. | DEFAULT | The AFFECTED packages with versions and the matched `affected` ranges. |
+| The script returned a level (after an AFFECTED package, or script-only). | 0–3 | The AFFECTED packages, if any, and the returned level. |
+| The script returned `null` or reached its end. | DEFAULT / INCONCLUSIVE | The AFFECTED packages, if any, and that the script made no statement. |
+| The script failed: parse error, CEL error, undefined variable, non-boolean condition, invalid return value. | DEFAULT / INCONCLUSIVE | The AFFECTED packages, if any, the error message and the script line. |
+| The script exceeded a sandbox limit. | DEFAULT / INCONCLUSIVE | The AFFECTED packages, if any, and which limit. |
+
+For the script cases, the score is `DEFAULT` if a package matched as AFFECTED and INCONCLUSIVE for script-only IoVs, exactly as in "Package evaluation".
+
+# Task
+
+Your task is to generate an Indicator of Vulnerability (IoV) JSON file for {CVE_ID}.
+Find the details of the given CVE ID: the affected component, the affected and fixed versions, the advisories that document them, and the preconditions and mitigations for exploitation.
+
+# Guidelines
+
+## Distributions
+
+- Cover exactly four distributions in `packages`: Debian (`debian`), Ubuntu (`ubuntu`), Red Hat Enterprise Linux (`rhel`) and Alpine Linux (`alpine`).
+- Do not add range sets for any other distribution ID, including derivatives and relatives of these four (e.g. `centos`, `almalinux`, `rocky`, `ol`, `fedora`, `amzn`, `linuxmint`, `pop`, `raspbian`) and other distributions (e.g. `sles`, `opensuse-leap`, `arch`). Hosts on them evaluate INCONCLUSIVE, which is intended.
+- The package manager of each is fixed: dpkg for Debian and Ubuntu, RPM for Red Hat Enterprise Linux, apk for Alpine.
+
+## General
+
+- Research the CVE using authoritative sources: NVD, the upstream advisory or fix commit, and the security trackers of the four distributions: the Debian Security Tracker, the Ubuntu CVE Tracker and Ubuntu Security Notices, the Red Hat CVE database and errata, and the Alpine security tracker and secdb. OSV can help as an aggregator.
+- Never invent or guess version numbers. If you cannot find reliable fixed-version information for a distribution release, omit that release; hosts on it then evaluate INCONCLUSIVE, which is correct. If no reliable version information exists at all, produce a script-only IoV.
+- Set `"schema_version": 2`.
+- Generate a fresh random (version 4) UUID.
+- Omit `created` and `updated`. They are set by the publishing system.
+- The `description` must summarize the vulnerability, the packages with their releases, fixed versions and advisories (including derived packages), notable releases left uncovered, packages deliberately omitted and why, the use of `arches` and `origin`, every condition the script checks, and why each resulting confidence level was chosen.
+
+## References
+
+- Add `references` for every source you used: the CVE record, the upstream advisory or fix commit, and every distribution advisory from which you took a fixed version.
+- For each distribution advisory, list in `releases` the releases whose range sets it documents, in the same notation as range sets. Every release in a range set should appear in at least one reference.
+- Only use identifiers and URLs you actually found. Never construct an advisory ID or URL from a pattern. If you know an advisory's ID but not its URL, give only the `id`, and vice versa.
+
+## Packages
+
+- Key `packages` by **binary** package names as installed, i.e. as shown by `dpkg-query -W`, `rpm -q` or `apk info`. Distribution trackers usually list **source** packages. Map these to the binary package(s) that actually ship the vulnerable code, e.g. source `openssh` becomes `openssh-server` for an sshd bug, and `openssl` becomes `libssl3` on Debian 12 or `openssl-libs` on RHEL 9. If the vulnerable code ships in several binary packages, add a key for each.
+- Also cover **derived packages**: packages that ship their own copy of the vulnerable code because they bundle, vendor or statically link it. Distributions track these as separate source packages with their own fixed versions, e.g. the Ubuntu CVE Tracker lists `nodejs`, which bundles OpenSSL, under OpenSSL CVEs, and Red Hat tracks packages that bundle a component, such as `nodejs`, separately. Check each tracker's complete package list for the CVE, not only the entry for the main component, and add a key for every affected binary package. Matching is blacklist-based: on a covered release, an affected package that is not keyed is invisible, and the host evaluates ABSENT. If you deliberately omit a listed package (e.g. virtual machine firmware such as `edk2`, which the host does not execute), state which one and why in the `description`.
+- Use an exact name as key whenever the package name is stable. Use a regex key only for package families whose names embed a version or ABI number, so that no single exact name covers all affected hosts. Examples are Debian/Ubuntu kernel images (`linux-image-6.1.0-18-amd64`, `linux-image-5.15.0-97-generic`). When writing a regex key:
+  - Always start it with `^` and end it with `$`.
+  - Make it as narrow as possible. It must not match packages that do not contain the vulnerable code or that use a different version numbering, such as `linux-image-*-dbg`, `linux-headers-*`, the metapackage `linux-image-amd64`, or `-unsigned` template packages. The version ranges must be valid for **every** package the regex can match.
+  - Use one key per flavour or source package when version numbering differs. For example, on Ubuntu, `-generic` kernels (source `linux`, e.g. `5.15.0-97.107`) and `-aws` kernels (source `linux-aws`, e.g. `5.15.0-1055.60`) need separate keys, each with its own fixed versions.
+  - Example for Debian 12 amd64 kernels: `^linux-image-6\.1\.0-[0-9]+-(amd64|cloud-amd64|rt-amd64)$`. In JSON, backslashes must be doubled.
+- For each key, add one range set per group of releases that share the same fixed version, built from the distribution's own advisories. Every release you list claims that it was researched, so list only releases for which you found reliable information.
+  - Write one string per distribution: `debian:12,13`, `ubuntu:22.04,24.04`, `rhel:8.10`, `alpine:3.20,3.21`. Use numeric ranges for consecutive versions (`rhel:8.7-8.10`, `alpine:3.19-3.22`).
+  - Use a major version such as `rhel:9` only if one range set is valid for every minor release it matches, including future ones, and override exceptions with a more specific release, e.g. `rhel:9.0` for a separate RHEL 9.0 EUS fix. If a fix is only known to apply from some minor release on, list those minor releases (`rhel:8.7-8.10`) instead of the major version.
+  - Add `ID:` for releases without `VERSION_ID`, such as Debian testing and unstable (`debian:`), when the range set is valid there.
+  - Avoid bare distribution IDs (`debian`): they claim coverage of every release of the distribution, including old ones you did not research.
+  - Alpine's `VERSION_ID` has three parts (`3.20.3`); list its branches as `alpine:3.20`, which matches every point release of the branch. Alpine edge has a `VERSION_ID` such as `3.23_alpha20250108`; do not list it.
+- The typical range set is `"affected": "< FIX"` plus `"unaffected": ">= FIX"`, with the release's fixed version as `FIX`. Always give both, so that no version on a listed release evaluates UNKNOWN. If the vulnerable code was introduced in a known version and the release also shipped older, unaffected versions, use `"affected": ">= INTRO, < FIX"` with `"unaffected": "*"`.
+- If a tracker lists a release as affected but not yet fixed (Ubuntu "needed" or "deferred", Debian "unfixed", Red Hat "Affected" or "Fix deferred"), still give it a range set: `"affected": "*"`, or `"affected": ">= INTRO"` with `"unaffected": "*"` if the vulnerable code was introduced in a known version that the release also shipped before. Do not invent an upper bound. Ubuntu "pending" with a version means that the fix is built but not yet published: use that version as `FIX`. State in the `description` which releases were unfixed at generation time.
+- Write each condition as an operator, a space and the version, e.g. `"< 1:3.0.1-47.el9_1"`. Versions contain no spaces or commas.
+- Write version strings in full, as the package manager reports them for the installed package, including the epoch if the package has one. Omitting an epoch changes the comparison result. dpkg examples: `1:9.2p1-2+deb12u3`, `3.0.11-1~deb12u2`. RPM examples: `8.7p1-38.el9_4.1`, `1:3.0.7-27.el9`. apk: `3.3.2-r0`, `9.7_p1-r4`. Do not include the architecture.
+- Use a range set with only `"unaffected": "*"` as described in "Unaffected releases": for releases on which the package never shipped an affected build, or to cover researched releases that ship none of the keyed packages. Do not use it just because a release currently ships a fixed version; give the release real ranges instead, so that older builds are still classified.
+- Use `arches` only when the advisory or the fix shows that version matching differs by package architecture: the vulnerable code exists only in some architectures' builds, or a fix was released per architecture. Then add a range set with `arches` and real ranges, and a range set without `arches` for the same releases (with `"unaffected": "*"` if the other architectures are unaffected). Use the package manager's architecture names. Do not use `arches` for CPU-dependent exploitability of code that is present on every architecture; check `uname.machine` or `cpu()` in the script instead.
+- Add `"origin": "distribution"` to a range set when same-named builds from outside the distribution are common and would compare misleadingly against the distribution's versions. Typical cases are packages that upstream vendors publish in their own repositories under the distribution's package name (web servers, databases, container runtimes, language runtimes, browsers) and range sets with `"unaffected": "*"` for such packages. Do not add it by default: on hosts where the origin cannot be verified, it turns results into INCONCLUSIVE.
+- Library packages whose names change between releases (e.g. `libssl1.1` → `libssl3` → `libssl3t64`) can remain installed after a distribution upgrade. On the newer release such a leftover evaluates UNKNOWN unless its key lists that release. Add the newer release to an existing range set only if its ranges are valid for every build that can be left over there; otherwise leave it out, and the result is INCONCLUSIVE, which is honest.
+- There are no distribution-agnostic entries: every release names one of the four distributions, and hosts on releases that no range set lists are INCONCLUSIVE. Do not try to cover other distributions or unresearched releases with upstream version numbers.
+- For kernel CVEs, use the kernel image package from the distribution's advisory. On Red Hat Enterprise Linux this is a stable name (e.g. `kernel-core` on RHEL 8/9). On Debian/Ubuntu it is a regex key covering the versioned image packages (see above). On Alpine it is the flavour package, e.g. `linux-lts` or `linux-virt`. The agent evaluates only the package of the running kernel, so the ranges describe the kernel image versions, not the other installed kernels.
+
+## Script
+
+- Use the script for preconditions that version matching cannot capture. Examples: whether the vulnerable component is compiled in, loaded, running or network-exposed; relevant configuration options; mitigations (sysctls, kernel command-line parameters, configuration directives, SELinux/AppArmor state, modprobe overrides); CPU architecture and CPU vulnerability state; present hardware; other installed packages that make the vulnerable code reachable.
+- Prefer the typed built-ins over reading and regex-matching raw files, and prefer the standard-library helpers over re-implementing them:
+  - `kernel_feature(config_opt, module)` for any kernel feature that can be built in or modular.
+  - `service_exposed(names)` for whether a daemon runs or is reachable, including socket activation. List every process and unit name the service has across distributions, e.g. `["sshd", "ssh"]`.
+  - `userns_unprivileged_allowed()` for the usual route by which unprivileged users reach kernel attack surface.
+  - `directive_values`, `ini_values`, `xml_query`, `json_query` and `yaml_query` for configuration files, and `file_matches` only for formats they do not cover.
+  - `listening_sockets()` to distinguish loopback-only from network-reachable listeners.
+- Do not put version checks of packages in the script. Version logic belongs in `packages`. `version_compare` is only for components that no package manager tracks, e.g. a vendored or bundled copy whose version you read from a file. Explain such a case in the `description`.
+- Use `installed_packages` only for conditions that involve another package, e.g. "the affected library is only reachable through the plugin `foo-plugin-xyz`": `LOW` if that package is not installed.
+- If packages are present, the script only runs when an affected package version is installed, so it does not need to re-check installation. In a script-only IoV, the script itself must determine whether the vulnerable component is present.
+- **Every execution path must end with an explicit `return`.** Never rely on falling off the end of the script or of a block. Write `return null` explicitly where the result is intentionally inconclusive. Every `if` whose blocks do not all return must be followed by code that does. In practice, the last top-level statement is either a `return` or an `if`/`elif`/`else` chain in which every block returns.
+- **Every `if` is closed by exactly one `end`.** `elif`, `else` and `end` belong to the nearest open `if`; an `end` without an open `if` is a parse error. Before answering, check that the `if` and `end` lines pair up.
+- Consider every combination of the facts the script inspects. Each fact can take each of its documented values or `null` (unavailable). Verify that each combination reaches the `return` you intend. With up to 4 facts, walk through all combinations explicitly.
+- Handle `null` defensively. Any constant or function can be `null` on some hosts, e.g. containers without systemd, unprivileged agents that cannot read `/etc/shadow` or process environments, or kernels without an accessible build configuration.
+  - Compare with `x == true`, `x == false` or `x == "value"`; these are `false` for `null`.
+  - Guard field access, indexing, `size` and string methods with `x != null && ...`, and test map keys with `"k" in m` before `m["k"]`.
+  - Never apply `!` or string methods to a value that may be `null`.
+  - Treat `null` as "unknown", never as evidence of absence. `[]` from a list-returning function is evidence of absence.
+  - A runtime error only degrades the result to `DEFAULT` or INCONCLUSIVE, but do not rely on errors for control flow.
+- Choose confidence levels by strength of evidence:
+  - `ABSENT` only when the vulnerable code is definitely not present or not reachable.
+  - `LOW` when mitigations are in place or the component is installed but not active or exposed.
+  - `MEDIUM`/`DEFAULT` when nothing is known either way.
+  - `HIGH` when the exploitation preconditions are affirmatively present.
+  - Put the strongest and most specific evidence first.
+- Common pitfalls:
+  - A kernel feature can be built in, loaded, or available as a module that is autoloaded on demand, sometimes by unprivileged users via user namespaces. Use `kernel_feature`: `"module"` is not `ABSENT`, and `"blacklisted"` only blocks automatic loading.
+  - A service that is not running may be started later or be socket-activated. `service_exposed` covers socket activation; `"installed"` is `LOW`, not `ABSENT`.
+  - `directive_values` returns `[]` when an option is not set; the daemon's default then applies. Know the default and handle `[]` explicitly. Use the precedence the daemon uses (`"first"` for sshd, usually `"last"` otherwise).
+  - Configuration files often have drop-in directories (e.g. `/etc/ssh/sshd_config.d/*.conf`, `/etc/sysctl.d/*.conf`). `directive_values` follows `Include` lines; for other formats, pass the drop-in globs explicitly.
+  - Prefer runtime state (`sysctl`, `kernel_cmdline`, `kernel_modules`, `get_processes`, `listening_sockets`, `systemd_unit`) over configuration files when both are available, because runtime state reflects what is actually in effect.
+  - `uname.machine` is the machine's architecture; architecture-specific package builds belong in `arches`, not in the script.
+- Use only the constants and built-ins listed above; no other functions exist. Keep the script short, include only facts that materially change the likelihood, and comment each decision with `//` lines.
+- Omit the `script` item if nothing beyond package versions is relevant.
+- The IoV must contain at least one of `packages` and `script`.
+
+# Output
+
+Output only the final IoV JSON.

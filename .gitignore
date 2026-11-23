@@ -1,0 +1,17 @@
+**/.env
+**/__pycache__/
+**/celery.log
+**/server.log
+**/etso-server-debug.log
+**/etso-server-info.log
+**/cvelistV5
+**/.venv-build/
+**/.venv
+**/.pyinstaller-build/
+*.log
+*.state
+src/celerybeat-schedule
+
+
+/paper.tex
+/paper/

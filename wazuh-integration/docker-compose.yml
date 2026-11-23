@@ -1,0 +1,21 @@
+services:
+  redis:
+    image: redis:7-alpine
+    # Unauthenticated: reachable from the host only, where ETSO runs.
+    ports:
+      - "127.0.0.1:6379:6379"
+
+  app:
+    container_name: etso
+    build: .
+    # Host networking, so "localhost" in .env is the Docker host (where
+    # wazuh-docker publishes the indexer and API).
+    network_mode: host
+    depends_on:
+      - redis
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://localhost:6379/0
+    volumes:
+      - ./src:/app/src:Z

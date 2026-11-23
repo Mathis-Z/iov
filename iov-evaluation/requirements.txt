@@ -1,0 +1,11 @@
+# script/environment.py patches cel-python's list/map equality for CEL's
+# heterogeneous null comparison; re-check that shim before moving past 0.5.
+cel-python~=0.5.0
+jsonschema>=4.18
+jsonpath-rfc9535>=1.0
+lxml>=5.0
+PyYAML>=6.0
+# CA bundle for hosts without one in a known location (see iov_source.py).
+certifi
+# Timezone database for cel-python's pendulum on hosts without /usr/share/zoneinfo.
+tzdata

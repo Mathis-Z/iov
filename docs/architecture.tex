@@ -1,0 +1,54 @@
+\begin{figure*}[t]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+  font=\footnotesize,
+  box/.style={draw, rounded corners=2pt, align=center, minimum height=1.0cm, inner sep=4pt, fill=white},
+  ours/.style={box, fill=green!10, draw=green!45!black, thick},
+  ext/.style={box, fill=gray!8, draw=gray!60, dashed},
+  store/.style={box, fill=blue!6, draw=blue!50!black},
+  arr/.style={-{Stealth[length=5pt]}, thick, draw=black!75},
+  lab/.style={font=\scriptsize, align=center, fill=white, inner sep=1.5pt},
+  grp/.style={draw=gray!70, rounded corners=4pt, inner sep=7pt},
+]
+% Endpoint
+\node[ours] (daemon) {\textbf{IoV daemon}\\sync, evaluate, publish};
+\node[box, below=1.0cm of daemon] (hostfacts) {host facts: packages, kernel,\\processes, sockets, files};
+\node[box, right=0.8cm of daemon] (agent) {Wazuh agent\\(queue socket)};
+\node[grp, fit=(daemon)(hostfacts)(agent), label={[font=\footnotesize\bfseries]below:Endpoint (monitored host)}] (ep) {};
+
+% Wazuh
+\node[box, right=1.5cm of agent] (manager) {Wazuh manager\\\texttt{iov\_rules.xml}};
+\node[store, below=1.0cm of manager] (indexer) {Wazuh indexer\\alerts, vulnerability states,\\\textbf{\texttt{iov-results}}};
+\node[box, below=1.0cm of indexer] (wdash) {Wazuh dashboard\\+ \textbf{IoV Dashboard} plugin};
+\node[grp, fit=(manager)(indexer)(wdash), label={[font=\footnotesize\bfseries]below:Wazuh}] (wz) {};
+
+% Enrichment server
+\node[ours, right=3.2cm of indexer] (etso) {\textbf{Enrichment server}\\poll verdicts, enrich,\\serve dashboard};
+\node[ext, above=1.0cm of etso] (scores) {FIRST EPSS,\\NVD CVSS};
+\node[box, below=1.0cm of etso] (user) {Analyst\\(browser)};
+
+% IoV server
+\node[ours, right=1.4cm of scores] (iovsrv) {\textbf{IoV server}\\generate, validate,\\serve corpus};
+\node[ext, below=1.0cm of iovsrv] (llm) {LLM with web search\\and page fetch (OpenRouter)};
+\node[ext, below=0.7cm of llm] (feeds) {Vulnerability-Lookup, GitHub\\advisories, distribution trackers};
+
+% Arrows
+\draw[arr] (hostfacts) -- node[lab, right] {read-only built-ins} (daemon);
+\draw[arr] (iovsrv.north) -- ++(0,0.6) coordinate (top) -| (daemon.north);
+\path (top) -- (top -| daemon.north) node[lab, midway, above] {\textcircled{\scriptsize 1} mirror the IoV corpus (content digests)};
+\draw[arr] (daemon) -- node[lab, above] {\textcircled{\scriptsize 2}} (agent);
+\draw[arr] (agent) -- node[lab, above] {\textcircled{\scriptsize 3} verdict} node[lab, below] {+ \iov{}} (manager);
+\draw[arr] (manager) -- node[lab, right] {\textcircled{\scriptsize 4} alert} (indexer);
+\draw[arr] ($(indexer.east)+(0,0.15)$) -- node[lab, above] {\textcircled{\scriptsize 5} poll alerts, read detections} ($(etso.west)+(0,0.15)$);
+\draw[arr] ($(etso.west)+(0,-0.35)$) -- node[lab, below, pos=0.75] {\textcircled{\scriptsize 6} upsert} ($(indexer.east)+(0,-0.35)$);
+\draw[arr] (scores) -- node[lab, right] {enrich} (etso);
+\draw[arr] ($(llm.north)+(-0.4,0)$) -- node[lab, right] {research, write} ($(iovsrv.south)+(-0.4,0)$);
+\draw[arr] (feeds.east) -- ++(0.5,0) |- node[lab, pos=0.25, right] {pre-fetch} (iovsrv.east);
+\draw[arr] (etso.south west) -- node[lab, sloped, above] {\textcircled{\scriptsize 7} dashboard (http)} (wdash.north east);
+\draw[arr] (wdash.east) -- node[lab, below] {https, Wazuh login} (user.west);
+\end{tikzpicture}%
+}
+\caption{Architecture of the Wazuh integration. Our components are shown in green. \textcircled{\tiny 1} The daemon mirrors the \iov{} corpus and evaluates it locally; \textcircled{\tiny 2}--\textcircled{\tiny 4} verdicts, each with the evaluated \iov{}, travel through Wazuh's own agent--manager channel into the alerts index; \textcircled{\tiny 5}--\textcircled{\tiny 6} the enrichment server projects the latest verdict per host and CVE into \texttt{iov-results} and adds EPSS and CVSS; \textcircled{\tiny 7} its dashboard ranks Wazuh's detections and the \iov{} verdicts, and the Wazuh dashboard serves it to logged-in users through our plugin.}
+\label{fig:architecture}
+\end{figure*}

@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+
+{% block title %}{{ cve_id }} — IoV Server{% endblock %}
+
+{% block content %}
+<p><a href="/">← all CVEs</a></p>
+<h2>{{ cve_id }}</h2>
+{% if state == "ok" %}
+  <pre>{{ iov_json }}</pre>
+{% elif state == "pending" %}
+  <p class="dim">Processing in progress — check back shortly.</p>
+{% elif state == "failed" %}
+  <p class="err">Processing failed for this CVE.</p>
+{% else %}
+  <p class="dim">Not found.</p>
+{% endif %}
+{% endblock %}

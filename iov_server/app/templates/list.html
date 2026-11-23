@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block title %}Processed CVEs — IoV Server{% endblock %}
+
+{% block content %}
+<h2>Processed CVEs</h2>
+{% if cves %}
+<ul>
+  {% for cve in cves %}
+  <li><a href="/{{ cve }}">{{ cve }}</a></li>
+  {% endfor %}
+</ul>
+{% if truncated %}
+<p class="note">Showing 30 of {{ total }}.</p>
+{% endif %}
+{% else %}
+<p class="dim">No processed CVEs yet.</p>
+{% endif %}
+{% endblock %}

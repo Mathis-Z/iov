@@ -1,0 +1,46 @@
+<!--
+  Copy to the MANAGER's /var/ossec/etc/rules/iov_rules.xml, then restart it:
+
+      sudo systemctl restart wazuh-manager
+      # or, in a container without systemd:
+      sudo /var/ossec/bin/wazuh-control restart
+
+  These match the events wazuh-evaluate-iov-daemon writes to the agent's queue
+  socket. The daemon sends pure JSON, so analysisd's built-in JSON decoding
+  splits it into iov.* fields and no custom decoder is needed.
+
+  Rule levels are deliberately low: an IoV verdict is an assessment, not an
+  alert. The levels exist so the events reach wazuh-alerts-*, where ETSO reads
+  them back and projects them into iov-results.
+-->
+<group name="iov,">
+
+  <rule id="100200" level="0">
+    <decoded_as>json</decoded_as>
+    <field name="iov.cve">\.+</field>
+    <description>IoV evaluation reported by the agent</description>
+    <group>iov_evaluation,</group>
+  </rule>
+
+  <rule id="100201" level="3">
+    <if_sid>100200</if_sid>
+    <field name="iov.level">INCONCLUSIVE|ABSENT|LOW</field>
+    <description>IoV $(iov.cve): $(iov.level) — no action indicated</description>
+    <group>iov_evaluation,</group>
+  </rule>
+
+  <rule id="100202" level="7">
+    <if_sid>100200</if_sid>
+    <field name="iov.level">MEDIUM</field>
+    <description>IoV $(iov.cve): an affected package is installed</description>
+    <group>iov_evaluation,</group>
+  </rule>
+
+  <rule id="100203" level="10">
+    <if_sid>100200</if_sid>
+    <field name="iov.level">HIGH</field>
+    <description>IoV $(iov.cve): affected and the exploitation preconditions are present</description>
+    <group>iov_evaluation,</group>
+  </rule>
+
+</group>

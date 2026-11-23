@@ -1,0 +1,8 @@
+# Allowlist: the image needs only the app, the prompt and the requirements.
+# Everything else stays out of the build context: iov_data is mounted at runtime,
+# and .env holds secrets that docker-compose passes in at runtime.
+*
+!app/
+!prompt/
+!requirements.txt
+**/__pycache__
